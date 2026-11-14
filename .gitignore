@@ -1,0 +1,17 @@
+/build/
+/runs/
+/backups/
+/evidence/
+/sim/worlds/
+__pycache__/
+*.pyc
+*.tar.gz
+*.zip
+*.log
+*.jsonl
+.env
+.env.*
+*.pem
+*.key
+core
+core.*

@@ -1,0 +1,277 @@
+%YAML:1.0
+# 2026-11-15：动作逻辑及控制参数同步当前室内实车版本；室外识别与曝光保留。
+# 调参和行为说明见 README.outdoor_sync.md。
+# Stable device identity: fail if H65 is absent, never silently use the other camera.
+camera_device: "/dev/v4l/by-id/usb-H65_USB_CAMERA_H65_USB_CAMERA-video-index0"
+width: 640
+height: 480
+set_auto_exposure: 3
+set_exposure: 1500
+# Automatic home DISABLED: user clarified the approved pose was set by physically moving the bracket.
+# The dormant 71/76 values came from older remote commands and are NOT a calibration of the manual pose.
+# Electrical pose calibration is required before enabling automatic return.
+camera_home_enabled: 0
+camera_pan_pwm: 71
+camera_tilt_pwm: 76
+# Original live lane PD and steering calibration.
+lane_pd_kp: 0.2
+lane_pd_kd: 0.5
+servo_center: 80
+servo_min: 55
+servo_max: 86
+# 当前室内实车速度表；corner_brake_s=0，不执行第27秒定时制动。
+speed:
+  neutral_pwm: 10000  # 停车中位，实测10000
+  start_pwm: 10900  # 独立原版巡线：起步阶段
+  corner_pwm: 10900  # 独立原版巡线：gear=1 弯道阶段
+  corner_fast_pwm: 12000  # 独立原版巡线：gear=2，原2200偏移经限幅后实际为12000
+  corner_brake_pwm: 7500  # 原版制动值；低于停车中位，不是普通停车命令
+  after_corner_pwm: 10900  # 独立原版巡线：弯道阶段结束后
+  gear: 1  # 独立原版的挡位选择，默认1
+  start_s: 2  # 独立原版起步阶段秒数
+  corner_end_s: 27  # 独立原版弯道阶段结束时刻，从开始运行计秒
+  corner_brake_s: 0  # 独立原版弯道后的制动持续秒数
+
+# 备用室内白线参数；当前实际识别后端由 lane_backend 指定。坐标640x480。
+lane_roi_top: 300
+lane_roi_bottom: 470
+white_s_max: 85
+white_v_min: 150
+lane_hough_votes: 28
+lane_min_span: 55
+lane_fit_tolerance: 18.
+# Full-resolution blue detection; no erosion of small distant cones.
+cone_roi_top: 280
+cone_h_min: 100
+cone_h_max: 130
+cone_s_min: 40
+cone_v_min: 55
+cone_min_pixels: 10
+cone_min_height: 4
+cone_confirm_frames: 2
+cone_avoid_start_y: 300.
+cone_full_avoid_y: 420.
+cone_pass_y: 445.
+# IMAGE-space margin, not calibrated vehicle width.
+cone_clearance_fraction: 0.18
+cone_slow_pwm: 10700
+steer_rate: 40.
+
+# Blue board selects the opposite parking half; only QR triggers final stop.
+board_h_min: 100
+board_h_max: 130
+board_s_min: 140
+board_v_min: 55
+board_roi_top: 100
+board_roi_left: 64
+board_roi_right: 576
+board_min_area: 1500
+board_min_width: 40
+board_min_height: 25
+board_min_fill: 0.82
+board_min_aspect: 0.65
+board_max_aspect: 5.
+board_confirm_frames: 5
+board_confirm_seconds: 0.15
+
+# 转向修正限幅；默认15，限制范围(0,15]，不会放宽舵机机械边界。
+pd_limit: 15.
+
+# 补全原有锥桶配置：默认值与之前代码相同。
+# 候选最大宽度，像素
+cone_max_width: 180
+# 候选高/宽的下限
+cone_aspect_min: 0.55
+# 候选高/宽的上限
+cone_aspect_max: 4.5
+# 框内蓝色像素占比下限
+cone_fill_min: 0.22
+# 扣除余量后通道最小剩余宽度比例
+cone_min_gap_fraction: 0.025
+# 短暂漏检保持原目标的秒数
+cone_lost_grace_s: 0.3
+# 判定通过需要观察到的向下移动像素数
+cone_approach_pixels: 35
+# 通过判定最短观察秒数
+cone_approach_seconds: 0.2
+# 同时检查两桶占道的纵坐标差范围
+cone_close_depth_px: 70
+# 目标平滑时间，越大变化越慢
+cone_smooth_seconds: 0.10
+# 绕桶目标每秒最大横向偏移比例
+cone_offset_rate: 1.0
+
+# 半区停车 / 二维码，坐标基于640x480；不是厘米。
+# 挡板靠近车道中线时不选侧的宽度比例；范围 0..0.2
+parking_side_deadband: 0.04
+# 判断挡板侧别所需的最小车道宽度，像素；范围 20..500
+parking_min_lane_width: 60
+# 选侧连续确认帧数；范围 1..30
+parking_side_frames: 3
+# 所选半区目标相对车道中线偏移比例；范围 0.05..0.4
+parking_target_offset: 0.25
+# 半区目标每秒最大偏移比例；范围 0.05..1.0
+parking_offset_rate: 0.35
+# 二维码框最小宽度和高度，像素；范围 8..200
+qr_min_size: 20
+# 二维码框顶部必须低于此行；范围 0..450
+qr_min_y: 100
+# 连续二维码框匹配的最小重叠率；范围 0.05..0.9
+qr_match_iou: 0.3
+# 最终停车二维码连续确认帧数；范围 2..30
+qr_confirm_frames: 3
+
+# 本次按要求关闭：控制更新超时不会触发停车退出；卡顿时保持上一条指令。
+control_watchdog_enabled: 0
+control_watchdog_ms: 300
+# 绕桶专用 PD；普通巡线仍用 lane_pd_kp / lane_pd_kd。
+cone_pd_kp: 0.55
+cone_pd_kd: 0.20
+# 绕桶有效非零修正的最小 PWM 幅度；0 禁用补偿。
+cone_min_correction: 1.0
+# 到达起绕位置时立即请求完整横向目标的40%，随后仍经过平滑。
+cone_start_blend: 0.60
+# 同时满足连续帧数和观察秒数才确认；0 表示只按 cone_confirm_frames。
+cone_confirm_seconds: 0.0
+
+# Two real visible lane fits may extend outside the near image by this many pixels.
+cone_lane_extrapolation_px: 320.
+
+lane_backend: "outdoor"
+
+# Shared module integration. Each environment has its own copy.
+parking_mode: "qr"
+parking_after_cones: 2
+camera_fps: 30
+camera_brightness: -1
+camera_gain: -1
+camera_white_balance_auto: -1
+light_green_seconds: 0.5
+# One reverse-braking pulse on a moving-to-red transition; seconds.
+light_brake_pwm: 9000
+light_brake_seconds: 0.8
+light_roi_x: 10
+light_roi_y: 20
+light_roi_w: 80
+light_roi_h: 42
+light_s_min: 60
+red_v_min: 230
+green_s_min: 30
+green_v_min: 200
+light_min_pixels: 100
+green_min_pixels: 12
+zebra_white_s_max: 75
+zebra_white_v_min: 175
+zebra_min_stripes: 4
+zebra_confirm_frames: 3
+zebra_roi_left: 0.12
+zebra_roi_right: 0.88
+zebra_roi_top: 0.45
+zebra_roi_bottom: 0.94
+zebra_min_stripe_width: 0.008
+zebra_max_stripe_width: 0.14
+zebra_min_span: 0.12
+zebra_min_support_height: 0.008
+zebra_max_width_ratio: 2.2
+zebra_max_pitch_ratio: 1.8
+zebra_min_gap_ratio: 0.15
+zebra_max_gap_ratio: 2.5
+zebra_stop_y: 0.65
+zebra_hold_seconds: 10.
+zebra_brake_seconds: 0.8
+zebra_brake_pwm: 8000
+
+# NEW parking-only calibration. Existing lane/zebra settings live in the frozen baseline.
+# Geometry/PWM-to-speed are provisional simulator assumptions, not measured vehicle values.
+camera_height_m: 0.14
+camera_forward_m: 0.17
+camera_pitch_deg: 15.0
+camera_hfov_deg: 120.0
+lane_width_m: 1.22
+wheelbase_m: 0.26
+vehicle_length_m: 0.40
+vehicle_width_m: 0.28
+pwm_speed_scale: 0.0005
+steering_rad_per_pwm: 0.032
+parking_length_m: 1.50
+parking_depth_m: 0.75
+parking_lookahead_m: 0.65
+parking_approach_pwm: 10900
+parking_enter_pwm: 10900
+parking_board_confirm_frames: 3
+parking_entry_confirm_frames: 3
+parking_blue_s_min: 140
+parking_brake_distance_m: 0.07
+parking_max_seconds: 45.0
+parking_max_blind_m: 1.20
+
+# Actual visible white fits may extend beyond the near image edge.
+lane_fit_margin_px: 160
+# Retry small QR localization at this scale, then convert back to original pixels.
+qr_detect_scale: 2
+
+# Small QR: crop bright panel above blue-board foot; still require real QR.
+qr_panel_v_min: 110
+qr_panel_s_max: 80
+
+# 与室内一致：只识别第一个桶一次，整套 S 形跨过两个桶后恢复巡线，不再检测第二桶。
+cone_fixed_maneuver: 1
+cone_s_course_once: 1
+# 0=按第一个桶位置选反侧；1=首次向右绕；-1=首次向左绕。整个 S 共用这个方向。
+cone_fixed_side: 0
+# 初值待实车调整；“两桶间距小于3米”不能直接换算秒数，以下不是实测轨迹。
+# 正 steer 朝首次绕行侧，负 steer 朝相反侧，0舵机回正；单位PWM，不是角度。
+# PWM目标=servo_center-side*steer，仍受55..86限位；中心80，左右可用幅度不同。
+# motor_pwm 每段固定油门；seconds 为该段前进命令持续秒数，交通停车期间暂停。
+# 每段必须>0且<=15秒，可增删/重排，最多20段，总计<=60秒。
+cone_s_steps:
+  - { name: FIRST_OUT,    steer:  5.0, seconds: 0.65, motor_pwm: 10900 } # 向第一桶反侧转出
+  - { name: FIRST_ALIGN,  steer: -5.0, seconds: 0.65, motor_pwm: 10900 } # 反打摆正到第一桶旁
+  - { name: FIRST_PASS,   steer:  0.0, seconds: 0.45, motor_pwm: 10900 } # 直行越过第一桶
+  - { name: CROSS,        steer: -5.0, seconds: 0.95, motor_pwm: 10900 } # 跨向第二桶的另一侧
+  - { name: SECOND_ALIGN, steer:  5.0, seconds: 0.95, motor_pwm: 10900 } # 摆正在第二桶旁
+  - { name: SECOND_PASS,  steer:  0.0, seconds: 0.45, motor_pwm: 10900 } # 直行越过第二桶
+  - { name: RETURN,       steer:  5.0, seconds: 0.65, motor_pwm: 10900 } # 向车道中间回转
+  - { name: FINAL_ALIGN,  steer: -5.0, seconds: 0.65, motor_pwm: 10900 } # 最后反打摆正
+  - { name: SETTLE,       steer:  0.0, seconds: 0.20, motor_pwm: 10900 } # 短直行，然后交还巡线
+# S_DONE 后本次运行不再触发锥桶动作；要重试整套 S，退出后重新启动程序。
+# passed=1 表示执行完一次S路线，不是视觉确认通过了两个桶。
+# 本模式停车解锁直接看 S_DONE，parking_after_cones 不参与；旧的消失/冷却计数也不参与。
+
+# 与室内一致的停车：挡板左 -> 右侧移并持续沿右边线；挡板右 -> 持续沿左边线。
+# 先固定侧移并反打摆正，再持续沿边线；不回中，直到所选半区二维码确认才最终停车。
+parking_fixed_maneuver: 0
+parking_edge_follow: 1
+# 停车阶段独立前进油门，选侧完成后生效，不受cone_slow_pwm或普通巡线分段油门限制。
+# 电机带不动时调高这个值，例如10900 -> 11000 -> 11100；须>neutral_pwm且<=12000。
+parking_follow_pwm: 10900
+# 目标车中心离所选边线的距离 / 已观测车道宽度：当前0.25=留25%的车道宽。
+# 越小越贴边，越大越往车道内侧；范围0.08..0.45，不是厘米，也不是车身外沿间距。
+parking_edge_margin_fraction: 0.25
+# 挡板选侧后锁定；缺线沿用当前室内的宽度缓存/巡线补边，不因单侧缺线停等。
+# 另一边线不可见时留边距离用最近双侧真实观测的车道宽度估计。
+# 本模式不使用 parking_target_offset/parking_offset_rate，也不使用原parking_maneuver_steps/parking_qr_seek_pwm。
+# 保存后退出并重启生效；红灯、斑马线和二维码终停仍具有更高优先级。
+
+# 以下PD/限幅只用于摆正后的沿边闭环，不限制前面的固定侧移动作。
+parking_shift_rate: 0.10             # 仅旧版parking_edge_entry=0渐进模式使用；新版固定侧移不用它
+parking_pd_kp: 0.18                  # 停车专用比例增益；普通巡线PD不变
+parking_pd_kd: 0.08                  # 停车专用每帧误差差分增益；首次接管不产生D冲击
+parking_steer_limit: 3.0             # 相对servo_center的最大修正PWM；当前80对应77..83
+parking_steer_rate: 3.0              # 每秒最大转向PWM变化；越小打方向越缓
+parking_error_smooth_seconds: 0.20   # 停车误差平滑秒数；越大越平缓，但响应越慢
+# 目标进度只在沿边前进命令实际输出时推进；交通停车期间不继续计时。
+
+# 停车贴边：固定侧移 -> 反打摆正 -> 短直行 -> 持续沿选定边线。
+parking_edge_entry: 1
+# 正steer向空闲侧，负steer反打；右侧移时PWM=80-steer，左侧移时镜像。
+# steer单位PWM，不是角度；seconds是前进命令持续秒数，交通停车时暂停。
+# 初值需实车调；严格三段，OUT为正、ALIGN为负、SETTLE为0。没有回中段。
+parking_edge_entry_steps:
+  - { name: OUT,    steer:  5.0, seconds: 0.60, motor_pwm: 10900 }
+  - { name: ALIGN,  steer: -4.0, seconds: 0.60, motor_pwm: 10900 }
+  - { name: SETTLE, steer:  0.0, seconds: 2.00, motor_pwm: 10900 }
+# 沿边额外看近端与远端的归一化偏差差值，车头斜向边线时提前反打。
+parking_heading_kp: 0.8
+# 实时二维码后台识别；巡线/侧移定时不再等QR搜索。离线回放保持同步、可复现。
+parking_qr_async: 1
