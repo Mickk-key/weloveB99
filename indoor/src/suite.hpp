@@ -36,11 +36,16 @@ struct SuiteConfig {
     ConeConfig cone;BoardConfig board;zebra::Config zebra;
     std::string backend=LaneBackend::name();
     double parkingPhotoDelay=1.0;
+    // 终点白板确认后只制动一次；参数与jgy/race室外配置一致。
+    int parking3BrakePwm=9500;double parking3BrakeSeconds=.3;
     double zebraY=.70,zebraHold=10,zebraBrake=.8;
     int zebraBrakePwm=9000,cameraFps=30;
     int brightness=-1,gain=-1,whiteBalanceAuto=-1;
     void load(const std::string& file){
         drive=load_settings(file);cv::FileStorage fs(file,cv::FileStorage::READ);
+        if(!fs["parking3_brake_pwm"].empty())fs["parking3_brake_pwm"]>>parking3BrakePwm;
+        if(!fs["parking3_brake_seconds"].empty())fs["parking3_brake_seconds"]>>parking3BrakeSeconds;
+        if(parking3BrakePwm<8000||parking3BrakePwm>=drive.neutral_pwm||!std::isfinite(parking3BrakeSeconds)||parking3BrakeSeconds<0||parking3BrakeSeconds>3)throw std::runtime_error("Invalid parking3 brake PWM/duration");
         parking3.load(fs);lane.load(fs);cone.load(fs);board.load(fs);light.load(fs,drive.neutral_pwm);
 #define R(key,field) if(!fs[key].empty())fs[key]>>field
         R("parking_photo_delay_seconds",parkingPhotoDelay);R("lane_backend",backend);
@@ -92,6 +97,7 @@ class Suite {
     TrafficLightControl traffic;RaceSequence race;
     double lastInputTime=-1,lastTime=-1,runStart=-1,filtered=78;
     int lastMotor=10000;
+    double parking3BrakeAt=-1; // 锁存首次白板确认时刻，后续帧不能延长或重复制动。
     OriginalPd pd;ZebraGate zebraGate;Parking3 parking3;
 
 public:
@@ -204,7 +210,16 @@ public:
             out.motor=traffic.braking(now)?cfg.light.brakePwm:cfg.drive.neutral_pwm;
             out.brakeRemaining=traffic.braking(now)?traffic.brakeRemaining(now):-1;
         }
-        if(out.parkingArmed&&parking3.stopped){out.state=out.parking="PARK3_PANEL_STOP";out.motor=cfg.drive.neutral_pwm;out.brakeRemaining=-1;}
+        // 终点停车优先于斑马线/红灯；制动剩余时间交给现有Output截止计时。
+        if(out.parkingArmed&&parking3.stopped){
+            if(parking3BrakeAt<0)parking3BrakeAt=now;
+            double remaining=std::max(0.,cfg.parking3BrakeSeconds-(now-parking3BrakeAt));
+            bool braking=remaining>1e-9;
+            out.state=out.parking=braking?"PARK3_BRAKE":"PARK3_PANEL_STOP";
+            out.motor=braking?cfg.parking3BrakePwm:cfg.drive.neutral_pwm;
+            out.brakeRemaining=braking?remaining:-1;
+            out.steer=int(cfg.drive.servo_center);out.target=filtered=cfg.drive.servo_center;
+        }
         if(now<1)out.motor=cfg.drive.neutral_pwm;
         if(out.motor==cfg.drive.neutral_pwm){out.steer=int(cfg.drive.servo_center);filtered=cfg.drive.servo_center;pd.previous=out.error;}
         if(out.motor>=cfg.drive.neutral_pwm)out.brakeRemaining=-1;
@@ -213,6 +228,7 @@ public:
         out.frameDt=dt;out.parkingSide=parking3.side;
         traffic.feedback(runLight&&out.motor>cfg.drive.neutral_pwm&&!parkingActive,
             runLight&&out.motor>cfg.drive.neutral_pwm&&out.motor<=cfg.light.sequence.slowPwm&&!parkingActive);
+        // 制动期间保持PARKING，回到中位才进入FINISHED并允许停车照片计时。
         race.finishParking(out.parkingArmed&&parking3.stopped&&out.motor==cfg.drive.neutral_pwm);
         out.raceStage=race.name();lastMotor=out.motor;
         return out;

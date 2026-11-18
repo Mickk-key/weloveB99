@@ -156,3 +156,7 @@ parking3_error_bias: 0.0
 parking3_line_hold_seconds: 0.3
 parking3_wait_side_pwm: 10500
 parking3_board_full_width: 1 # include boards touching image edges; 0 uses shared board_roi_left/right
+
+# 白矩形确认后的一次制动：同步jgy/race室外配置，结束后保持电机中位。
+parking3_brake_pwm: 9500
+parking3_brake_seconds: 0.3

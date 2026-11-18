@@ -84,7 +84,8 @@ class Parking3 {
             std::vector<std::vector<cv::Point>> contours;
             cv::findContours(white,contours,cv::RETR_EXTERNAL,cv::CHAIN_APPROX_SIMPLE);
             for(const auto& q:contours){auto r=cv::boundingRect(q);double area=cv::contourArea(q);
-                if(r.width<35||r.width>250||r.height<40||r.height>300||
+                // 沿用jgy/race最新逻辑：近处白板允许超过旧250×300上限，其余门槛保留。
+                if(r.width<35||r.height<40||
                    r.br().y<c.stopMinBottom||r.area()<c.stopMinArea||
                    area/r.area()<c.stopMinFill||double(r.width)/r.height<.35||
                    double(r.width)/r.height>1.8||
