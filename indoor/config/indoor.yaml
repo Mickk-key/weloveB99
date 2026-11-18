@@ -1,0 +1,166 @@
+%YAML:1.0
+# 拆分版本：除巡线入口外，室内和室外参数一致；旧停车/动作表字段已移除。
+
+# 相机、GPIO和控制：保持现有室外值；不自动改变手调支架姿态。
+camera_device: "/dev/v4l/by-id/usb-H65_USB_CAMERA_H65_USB_CAMERA-video-index0"
+width: 640
+height: 480
+set_auto_exposure: 3
+set_exposure: 1500
+camera_home_enabled: 0
+camera_pan_pwm: 71
+camera_tilt_pwm: 76
+servo_center: 80
+servo_min: 55
+servo_max: 86
+speed:
+  neutral_pwm: 10000  # GPIO13 直接 PWM 停车控制值
+  start_pwm: 10900  # 独立原版巡线：起步阶段
+  corner_pwm: 10900  # 独立原版巡线：gear=1 弯道阶段
+  corner_fast_pwm: 12000  # 独立原版巡线：gear=2，原2200偏移经限幅后实际为12000
+  corner_brake_pwm: 7500  # 原版制动值；低于停车中位，不是普通停车命令
+  after_corner_pwm: 10900  # 独立原版巡线：弯道阶段结束后
+  gear: 1  # 独立原版的挡位选择，默认1
+  start_s: 2  # 独立原版起步阶段秒数
+  corner_end_s: 27  # 独立原版弯道阶段结束时刻，从开始运行计秒
+  corner_brake_s: 0  # 独立原版弯道后的制动持续秒数
+steer_rate: 40.
+pd_limit: 15.
+control_watchdog_enabled: 0
+control_watchdog_ms: 300
+camera_fps: 30
+camera_brightness: -1
+camera_gain: -1
+camera_white_balance_auto: -1
+
+# 巡线：仅此环境入口和原白线识别参数可不同；PD原值保留。
+lane_pd_kp: 0.2
+lane_pd_kd: 0.5
+lane_roi_top: 300
+lane_roi_bottom: 470
+white_s_max: 85
+white_v_min: 150
+lane_hough_votes: 28
+lane_min_span: 55
+lane_fit_tolerance: 18.
+lane_backend: "indoor"
+lane_width_m: 1.22
+lane_fit_margin_px: 160
+
+# 绕桶：两环境统一使用室外形状识别和视觉边界，不使用固定S。
+cone_roi_top: 240
+cone_min_height: 4
+cone_confirm_frames: 2
+cone_avoid_start_y: 280.
+cone_full_avoid_y: 420.
+cone_pass_y: 445.
+cone_clearance_fraction: 0.18
+cone_slow_pwm: 10700
+cone_max_width: 180
+cone_min_gap_fraction: 0.025
+cone_lost_grace_s: 0.3
+cone_approach_pixels: 35
+cone_approach_seconds: 0.2
+cone_close_depth_px: 70
+cone_smooth_seconds: 0.10
+cone_offset_rate: 1.0
+cone_start_blend: 0.60
+cone_confirm_seconds: 0.0
+cone_lane_extrapolation_px: 320.
+cone_lane_mode: 1
+cone_lane_count: 2
+cone_handoff_y: 420.
+cone_shape_mode: 1
+cone_shape_min_height: 18
+cone_shape_aspect_min: 1.05
+cone_shape_min_width: 8
+cone_shape_top_ratio: 0.65
+
+# 蓝挡板：发车与终点使用独立状态；同一组现有识别阈值。
+board_h_min: 100
+board_h_max: 130
+board_s_min: 140
+board_v_min: 55
+board_roi_top: 100
+board_roi_left: 64
+board_roi_right: 576
+board_pixel_mode: 1
+board_min_pixels: 6500
+board_min_area: 1500
+board_min_width: 40
+board_min_height: 25
+board_min_fill: 0.82
+board_min_aspect: 0.65
+board_max_aspect: 5.
+board_confirm_frames: 5
+board_confirm_seconds: 0.15
+
+# 斑马线：两环境使用相同检测、制动和等待时长。
+zebra_white_s_max: 75
+zebra_white_v_min: 175
+zebra_min_stripes: 4
+zebra_confirm_frames: 3
+zebra_roi_left: 0.12
+zebra_roi_right: 0.88
+zebra_roi_top: 0.45
+zebra_roi_bottom: 0.94
+zebra_min_stripe_width: 0.008
+zebra_max_stripe_width: 0.14
+zebra_min_span: 0.12
+zebra_min_support_height: 0.008
+zebra_max_width_ratio: 2.2
+zebra_max_pitch_ratio: 1.8
+zebra_min_gap_ratio: 0.15
+zebra_max_gap_ratio: 2.5
+zebra_stop_y: 0.65
+zebra_hold_seconds: 10.
+zebra_brake_seconds: 0.8
+zebra_brake_pwm: 8000
+
+# 红绿灯：默认原版颜色识别；--light-night切换现有夜间检测器。
+light_brake_pwm: 8000
+light_brake_seconds: 0.8
+light_green_seconds: 0.5
+light_after_zebra_enabled: 1
+light_after_zebra_seconds: 3.0
+light_slow_pwm: 10700
+light_slow_settle_seconds: 0.3
+light_detect_interval_ms: 100
+
+# 唯一停车为parking3；蓝板阈值来自board_*，白边来自巡线；其余参数均为本模块实际使用。
+parking_photo_delay_seconds: 1.0
+parking3_yellow_h_min: 10
+parking3_yellow_h_max: 34
+parking3_yellow_s_min: 35
+parking3_yellow_v_min: 125
+parking3_roi_top: 180
+parking3_roi_bottom: 470
+parking3_min_length: 65
+parking3_hough_votes: 25
+parking3_max_gap: 18
+parking3_max_slope: 0.25
+parking3_side_frames: 2
+parking3_side_gap_px: 25
+parking3_follow_pwm: 10600
+parking3_kp: 0.4
+parking3_kd: 0.5
+parking3_steer_limit: 15.0
+parking3_steer_rate: 40.0
+parking3_stop_white_v_min: 230
+parking3_stop_white_s_max: 120
+parking3_stop_min_area: 2500
+parking3_stop_min_bottom: 200
+parking3_stop_min_fill: 0.65
+parking3_stop_confirm_frames: 3
+parking3_stop_confirm_seconds: 0.2
+parking3_stop_center_tolerance: 0.3
+parking3_stop_dim_v_min: 90
+parking3_stop_dim_s_max: 90
+parking3_stop_dark_v_max: 100
+parking3_stop_dark_ring_fraction: 0.6
+parking3_distance_near_px: 100.0
+parking3_distance_far_px: 40.0
+parking3_error_bias: 0.0
+parking3_line_hold_seconds: 0.3
+parking3_wait_side_pwm: 10500
+parking3_board_full_width: 1 # include boards touching image edges; 0 uses shared board_roi_left/right

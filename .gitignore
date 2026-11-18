@@ -1,0 +1,11 @@
+# Machine-local outputs; the repository contains source, configuration and scripts.
+**/build/
+**/runs/
+/backup/
+/validation/
+__pycache__/
+*.pyc
+*.log
+*.new
+*.install
+*.restore

@@ -1,0 +1,13 @@
+%YAML:1.0
+# --light-night专用：来自race_suite_outdoor_v2/config/outdoor.yaml的识别参数。
+# 只供V2 LightDetector读取；不覆盖V3巡线、电机、斑马线或灯罩模式配置。
+light_roi_x: 10
+light_roi_y: 20
+light_roi_w: 80
+light_roi_h: 42
+light_s_min: 60
+red_v_min: 230
+green_s_min: 30
+green_v_min: 200
+light_min_pixels: 100
+green_min_pixels: 12
