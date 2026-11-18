@@ -1,4 +1,0 @@
-#include "parking_qr.hpp"
-#include <cassert>
-#include <iostream>
-int main(){LaneV2 l;l.leftValid=l.rightValid=true;l.la=l.ra=0;l.lb=100;l.rb=540;cv::Mat white(480,640,CV_8UC3,cv::Scalar(255,255,255));BlueBoardStop b;b.stopped=b.candidate=true;b.box={170,250,80,60};Parking p;for(int i=0;i<30;++i)p.update(b,l,white,i*.05);assert(p.side==1&&p.offset>0&&!p.stopped&&!p.hold);b.candidate=false;for(int i=30;i<40;++i)p.update(b,l,white,i*.05);assert(p.side==1&&!p.stopped);b.candidate=true;b.box={390,250,80,60};Parking left;for(int i=0;i<30;++i)left.update(b,l,white,i*.05);assert(left.side==-1&&left.offset<0&&!left.stopped);auto q=cv::imread("tests/parking-qr.png");assert(!q.empty());for(int i=40;i<46;++i)p.update(b,l,q,i*.05);assert(p.stopped);p.update(b,l,white,3);assert(p.stopped);for(int i=30;i<36;++i)left.update(b,l,q,i*.05);assert(!left.stopped);std::cout<<"PASS opposite-half, side lock, white-board negative, selected-side QR stop/latch, wrong-side QR rejection\n";}

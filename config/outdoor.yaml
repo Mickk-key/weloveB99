@@ -1,7 +1,5 @@
 %YAML:1.0
-# 2026-11-15：动作逻辑及控制参数同步当前室内实车版本；室外识别与曝光保留。
-# 调参和行为说明见 README.outdoor_sync.md。
-# Stable device identity: fail if H65 is absent, never silently use the other camera.
+# race: direct GPIO13 PWM 200 Hz, range 40000; no pulse mapping.
 camera_device: "/dev/v4l/by-id/usb-H65_USB_CAMERA_H65_USB_CAMERA-video-index0"
 width: 640
 height: 480
@@ -16,12 +14,13 @@ camera_tilt_pwm: 76
 # Original live lane PD and steering calibration.
 lane_pd_kp: 0.2
 lane_pd_kd: 0.5
+# 2026-11-17：恢复旧室外配置中位80；室内配置独立，硬件脉宽修复仍使用v3。
 servo_center: 80
 servo_min: 55
 servo_max: 86
 # 当前室内实车速度表；corner_brake_s=0，不执行第27秒定时制动。
 speed:
-  neutral_pwm: 10000  # 停车中位，实测10000
+  neutral_pwm: 10000  # GPIO13 直接 PWM 停车控制值
   start_pwm: 10900  # 独立原版巡线：起步阶段
   corner_pwm: 10900  # 独立原版巡线：gear=1 弯道阶段
   corner_fast_pwm: 12000  # 独立原版巡线：gear=2，原2200偏移经限幅后实际为12000
@@ -40,8 +39,8 @@ white_v_min: 150
 lane_hough_votes: 28
 lane_min_span: 55
 lane_fit_tolerance: 18.
-# Full-resolution blue detection; no erosion of small distant cones.
-cone_roi_top: 280
+# Outdoor uses cone_shape_mode below. HSV keys are retained only for legacy mode.
+cone_roi_top: 240
 cone_h_min: 100
 cone_h_max: 130
 cone_s_min: 40
@@ -49,7 +48,7 @@ cone_v_min: 55
 cone_min_pixels: 10
 cone_min_height: 4
 cone_confirm_frames: 2
-cone_avoid_start_y: 300.
+cone_avoid_start_y: 280.
 cone_full_avoid_y: 420.
 cone_pass_y: 445.
 # IMAGE-space margin, not calibrated vehicle width.
@@ -57,7 +56,7 @@ cone_clearance_fraction: 0.18
 cone_slow_pwm: 10700
 steer_rate: 40.
 
-# Blue board selects the opposite parking half; only QR triggers final stop.
+# Blue board selects the opposite parking half; timed parking uses the existing action table.
 board_h_min: 100
 board_h_max: 130
 board_s_min: 140
@@ -65,6 +64,8 @@ board_v_min: 55
 board_roi_top: 100
 board_roi_left: 64
 board_roi_right: 576
+board_pixel_mode: 1
+board_min_pixels: 6500
 board_min_area: 1500
 board_min_width: 40
 board_min_height: 25
@@ -140,26 +141,12 @@ cone_lane_extrapolation_px: 320.
 lane_backend: "outdoor"
 
 # Shared module integration. Each environment has its own copy.
-parking_mode: "qr"
+parking_mode: "yellow" # Fixed OUT/ALIGN/SETTLE entry, then yellow/white path and white-rectangle stop
 parking_after_cones: 2
 camera_fps: 30
 camera_brightness: -1
 camera_gain: -1
 camera_white_balance_auto: -1
-light_green_seconds: 0.5
-# One reverse-braking pulse on a moving-to-red transition; seconds.
-light_brake_pwm: 9000
-light_brake_seconds: 0.8
-light_roi_x: 10
-light_roi_y: 20
-light_roi_w: 80
-light_roi_h: 42
-light_s_min: 60
-red_v_min: 230
-green_s_min: 30
-green_v_min: 200
-light_min_pixels: 100
-green_min_pixels: 12
 zebra_white_s_max: 75
 zebra_white_v_min: 175
 zebra_min_stripes: 4
@@ -215,15 +202,15 @@ qr_panel_v_min: 110
 qr_panel_s_max: 80
 
 # 与室内一致：只识别第一个桶一次，整套 S 形跨过两个桶后恢复巡线，不再检测第二桶。
-cone_fixed_maneuver: 1
-cone_s_course_once: 1
-# 0=按第一个桶位置选反侧；1=首次向右绕；-1=首次向左绕。整个 S 共用这个方向。
+cone_fixed_maneuver: 0
+cone_s_course_once: 0
+# 旧固定模式的方向参数；cone_lane_mode=1时按每个桶的真实侧别分别选侧。
 cone_fixed_side: 0
 # 初值待实车调整；“两桶间距小于3米”不能直接换算秒数，以下不是实测轨迹。
 # 正 steer 朝首次绕行侧，负 steer 朝相反侧，0舵机回正；单位PWM，不是角度。
 # PWM目标=servo_center-side*steer，仍受55..86限位；中心80，左右可用幅度不同。
-# motor_pwm 每段固定油门；seconds 为该段前进命令持续秒数，交通停车期间暂停。
 # 每段必须>0且<=15秒，可增删/重排，最多20段，总计<=60秒。
+# 以下九段表仅保留历史标定，视觉模式不读取、不执行。
 cone_s_steps:
   - { name: FIRST_OUT,    steer:  5.0, seconds: 0.65, motor_pwm: 10900 } # 向第一桶反侧转出
   - { name: FIRST_ALIGN,  steer: -5.0, seconds: 0.65, motor_pwm: 10900 } # 反打摆正到第一桶旁
@@ -234,9 +221,9 @@ cone_s_steps:
   - { name: RETURN,       steer:  5.0, seconds: 0.65, motor_pwm: 10900 } # 向车道中间回转
   - { name: FINAL_ALIGN,  steer: -5.0, seconds: 0.65, motor_pwm: 10900 } # 最后反打摆正
   - { name: SETTLE,       steer:  0.0, seconds: 0.20, motor_pwm: 10900 } # 短直行，然后交还巡线
-# S_DONE 后本次运行不再触发锥桶动作；要重试整套 S，退出后重新启动程序。
-# passed=1 表示执行完一次S路线，不是视觉确认通过了两个桶。
-# 本模式停车解锁直接看 S_DONE，parking_after_cones 不参与；旧的消失/冷却计数也不参与。
+# 视觉模式通过两个桶后进入DONE，不再把停车蓝板作为新锥桶。
+# 视觉模式passed为达到近端通过条件的不同跟踪ID数量，目标为2；不是里程计。
+# 视觉模式在cone_lane_count个桶通过、临时边界回归后解锁停车。
 
 # 与室内一致的停车：挡板左 -> 右侧移并持续沿右边线；挡板右 -> 持续沿左边线。
 # 先固定侧移并反打摆正，再持续沿边线；不回中，直到所选半区二维码确认才最终停车。
@@ -251,7 +238,6 @@ parking_edge_margin_fraction: 0.25
 # 挡板选侧后锁定；缺线沿用当前室内的宽度缓存/巡线补边，不因单侧缺线停等。
 # 另一边线不可见时留边距离用最近双侧真实观测的车道宽度估计。
 # 本模式不使用 parking_target_offset/parking_offset_rate，也不使用原parking_maneuver_steps/parking_qr_seek_pwm。
-# 保存后退出并重启生效；红灯、斑马线和二维码终停仍具有更高优先级。
 
 # 以下PD/限幅只用于摆正后的沿边闭环，不限制前面的固定侧移动作。
 parking_shift_rate: 0.10             # 仅旧版parking_edge_entry=0渐进模式使用；新版固定侧移不用它
@@ -260,13 +246,14 @@ parking_pd_kd: 0.08                  # 停车专用每帧误差差分增益；�
 parking_steer_limit: 3.0             # 相对servo_center的最大修正PWM；当前80对应77..83
 parking_steer_rate: 3.0              # 每秒最大转向PWM变化；越小打方向越缓
 parking_error_smooth_seconds: 0.20   # 停车误差平滑秒数；越大越平缓，但响应越慢
-# 目标进度只在沿边前进命令实际输出时推进；交通停车期间不继续计时。
 
 # 停车贴边：固定侧移 -> 反打摆正 -> 短直行 -> 持续沿选定边线。
 parking_edge_entry: 1
-# 正steer向空闲侧，负steer反打；右侧移时PWM=80-steer，左侧移时镜像。
-# steer单位PWM，不是角度；seconds是前进命令持续秒数，交通停车时暂停。
+parking_yellow_fixed_entry: 1
+# 正steer向空闲侧，负steer反打；右侧移时PWM=servo_center-steer，左侧移时镜像。
 # 初值需实车调；严格三段，OUT为正、ALIGN为负、SETTLE为0。没有回中段。
+# timed 模式：OUT转出、ALIGN反打、SETTLE回正直行，再限时反向制动并锁存停车。
+# seconds 均可调；SETTLE.seconds 为最后直行时间，默认2秒。
 parking_edge_entry_steps:
   - { name: OUT,    steer:  5.0, seconds: 0.60, motor_pwm: 10900 }
   - { name: ALIGN,  steer: -4.0, seconds: 0.60, motor_pwm: 10900 }
@@ -275,3 +262,227 @@ parking_edge_entry_steps:
 parking_heading_kp: 0.8
 # 实时二维码后台识别；巡线/侧移定时不再等QR搜索。离线回放保持同步、可复现。
 parking_qr_async: 1
+
+# WAIT_BOARD_SIDE only; fixed entry steps resume their own motor_pwm.
+parking_wait_side_pwm: 10500
+
+# After SETTLE: bounded reverse, then latched neutral. 0 seconds disables reverse.
+parking_reverse_pwm: 9000
+parking_reverse_seconds: 0.3
+
+# 2026-11-17 outdoor: real-time cone boundaries, ordinary lane PD, two tracked cones.
+# The historical cone_s_steps table above is dormant in this mode.
+cone_lane_mode: 1
+cone_lane_count: 2
+# 仅最后一桶结束后的回中：目标转向相对servo_center的限幅(PWM)，及变化速度(PWM/秒)。
+# 不改变绕第一/第二桶、两桶衔接和普通巡线；0表示沿用原限制。
+cone_handoff_y: 420.
+
+# Outdoor cones: shape-only decisions, no required hue/saturation/body colour.
+# The older cone_h/s/v values above are dormant; indoor still uses its own HSV path.
+cone_shape_mode: 1
+cone_shape_min_height: 18
+cone_shape_aspect_min: 1.05
+cone_shape_min_width: 8
+cone_shape_top_ratio: 0.65
+
+# Horizontal black traffic-light housing; no lamp-color classification in this mode.
+# Bottom edge in the ORIGINAL 640x480 frame; smaller y normally stops farther away.
+parking_yellow_h_min: 15
+parking_yellow_h_max: 40
+parking_yellow_s_min: 35
+parking_yellow_v_min: 80
+parking_yellow_roi_top: 190
+parking_yellow_roi_bottom: 470
+parking_yellow_min_span: 55
+parking_yellow_pwm: 10700
+parking_yellow_kp: 0.2
+parking_yellow_kd: 0.08
+parking_yellow_steer_limit: 6.
+parking_yellow_steer_rate: 12.
+
+# Distant T crossbar appears pale: only crossbar uses these relaxed thresholds.
+
+
+# White panel with an internal dark block; yellow T no longer stops the car.
+parking_panel_white_v_min: 190
+parking_panel_white_s_max: 85
+parking_panel_dark_v_max: 160
+parking_panel_min_area: 2000
+parking_panel_min_bottom: 250
+parking_panel_confirm_frames: 3
+parking_panel_confirm_seconds: 0.2
+
+# Loose QR-like black/white texture; no decoding required.
+
+# One entry turn toward selected side, then yellow/white line following.
+parking_yellow_entry_seconds: 0.0 # Skip entry turn; follow white lanes immediately
+parking_yellow_entry_steer: 5.
+parking_yellow_entry_pwm: 10500
+
+# Side from blue-board center versus nearby yellow crossbar midpoint.
+parking_side_yellow_bar: 1
+parking_side_bar_min_width: 80
+parking_side_bar_near_y: 45
+parking_side_bar_frames: 2
+parking_side_bar_max_slope: 0.18
+parking_side_bar_deadband: 0.04
+
+# Manual direction overrides side selection ONLY after blue-board confirmation.
+parking_manual_side_enabled: 0
+parking_manual_side: 1 # 1 RIGHT, -1 LEFT
+cone_return_steer_limit: 4.0
+cone_return_steer_rate: 20.0
+# Begin blending the next confirmed cone before the first exits the image.
+# First cone must also be laterally clear; this is an image row, not metres.
+
+# Centered dark blob inside white panel, Gaussian blur then connectivity.
+parking_panel_blob_min_size: 12
+parking_panel_blur_kernel: 7
+parking_panel_center_tolerance: 0.25
+
+# Delay after final neutral stop before saving one photo.
+parking_photo_delay_seconds: 1.0
+
+# Selected-side white boundary pairing for PARK_FOLLOW.
+parking_white_center_max_offset: 140.
+parking_white_track_tolerance: 60.
+parking_white_min_gap: 60
+parking_white_hold_seconds: 0.3
+
+# Reject weak reflection candidates before selecting real white boundaries.
+parking_white_min_support: 120.
+parking_white_min_coverage: 0.55
+parking_white_support_ratio: 0.35
+
+# parking2: 蓝板确认后选其反侧的横向黄线，中点竖线跟踪；丢线回正直行；白板锁停。
+# 使用 --modules lane,parking2；当前 parking_mode: yellow 供原 parking 保持原行为。
+parking2_yellow_h_min: 10
+parking2_yellow_h_max: 34
+parking2_yellow_s_min: 35
+parking2_yellow_v_min: 125
+parking2_roi_top: 180
+parking2_roi_bottom: 470
+parking2_min_length: 65
+parking2_hough_votes: 25
+parking2_max_gap: 18
+parking2_max_slope: 0.25
+parking2_side_frames: 2
+parking2_side_gap_px: 25
+parking2_follow_pwm: 10600
+parking2_kp: 0.4
+parking2_kd: 0.5
+parking2_steer_limit: 15.0
+parking2_steer_rate: 40.0
+# 停车白板识别沿用上方 parking_panel_* 阈值与连续确认设置。
+
+# parking2 边缘蓝挡板补检：HSV 与最小连通区域；可识别贴画面边缘的挡板。
+parking2_blue_h_min: 100
+parking2_blue_h_max: 130
+parking2_blue_s_min: 60
+parking2_blue_v_min: 55
+parking2_blue_min_pixels: 2500
+parking2_blue_min_height: 100
+parking2_blue_confirm_frames: 2
+
+# parking2 蓝挡板可见时，所选侧可信白边的 HSV 与线段筛选。
+parking2_white_s_max: 70
+parking2_white_v_min: 150
+parking2_white_min_length: 65
+parking2_white_min_gap: 25
+parking2_white_max_slope: 1.6
+
+# parking2 选侧后的黄线＋白线巡线；只对纵向黄线生效，横黄线选侧仍用 parking2_yellow_*。
+parking2_lane_yellow_h_min: 10
+parking2_lane_yellow_h_max: 34
+parking2_lane_yellow_s_min: 35
+parking2_lane_yellow_v_min: 125
+parking2_lane_yellow_min_length: 65
+parking2_lane_yellow_max_slope: 1.6
+parking2_lane_min_gap: 60
+parking2_lane_max_gap: 550
+parking2_blue_leave_frames: 2
+
+# parking2 白色矩形停车（无需内部二维码或暗块）。
+parking2_stop_white_v_min: 230
+parking2_stop_white_s_max: 120
+parking2_stop_min_area: 2500
+parking2_stop_min_bottom: 200
+parking2_stop_min_fill: 0.65
+parking2_stop_confirm_frames: 3
+parking2_stop_confirm_seconds: 0.2
+parking2_stop_center_tolerance: 0.3
+
+# 暗光停车板：较低亮度的浅色矩形需被深色边框包围。
+parking2_stop_dim_v_min: 90
+parking2_stop_dim_s_max: 90
+parking2_stop_dark_v_max: 100
+parking2_stop_dark_ring_fraction: 0.6
+
+# parking3: same board-side/white-panel criteria as parking2, single outer white boundary.
+parking3_yellow_h_min: 10
+parking3_yellow_h_max: 34
+parking3_yellow_s_min: 35
+parking3_yellow_v_min: 125
+parking3_roi_top: 180
+parking3_roi_bottom: 470
+parking3_min_length: 65
+parking3_hough_votes: 25
+parking3_max_gap: 18
+parking3_max_slope: 0.25
+parking3_side_frames: 2
+parking3_side_gap_px: 25
+parking3_follow_pwm: 10600
+parking3_kp: 0.4
+parking3_kd: 0.5
+parking3_steer_limit: 15.0
+parking3_steer_rate: 40.0
+parking3_white_s_max: 70
+parking3_white_v_min: 150
+parking3_white_min_length: 65
+parking3_white_min_gap: 25
+parking3_white_max_slope: 1.6
+parking3_lane_yellow_h_min: 10
+parking3_lane_yellow_h_max: 34
+parking3_lane_yellow_s_min: 35
+parking3_lane_yellow_v_min: 125
+parking3_lane_yellow_min_length: 65
+parking3_lane_yellow_max_slope: 1.6
+parking3_lane_min_gap: 60
+parking3_lane_max_gap: 550
+parking3_stop_white_v_min: 230
+parking3_stop_white_s_max: 120
+parking3_stop_min_area: 2500
+parking3_stop_min_bottom: 200
+parking3_stop_min_fill: 0.65
+parking3_stop_confirm_frames: 3
+parking3_stop_confirm_seconds: 0.2
+parking3_stop_center_tolerance: 0.3
+parking3_stop_dim_v_min: 90
+parking3_stop_dim_s_max: 90
+parking3_stop_dark_v_max: 100
+parking3_stop_dark_ring_fraction: 0.6
+# 640x480 pixels. Increase distance to move inward away from selected white edge.
+parking3_distance_near_px: 100.0
+parking3_distance_far_px: 40.0
+# Positive bias moves target RIGHT, negative LEFT; 1 error unit = 8 pixels.
+parking3_error_bias: 0.0
+parking3_line_hold_seconds: 0.3
+parking3_wait_side_pwm: 10500
+
+# parking3 uses shared board_min_pixels / board_confirm_*; no independent lower pixel bypass.
+parking3_board_full_width: 1 # include boards touching image edges; 0 uses shared board_roi_left/right
+
+# parking3 white detection now reuses the active lane backend and its lane/white settings.
+# Legacy parking3_white_* and parking3_lane_yellow_* no longer affect white detection.
+# parking3_distance_near_px/far_px, error_bias, PD, hold and board/stop settings remain active.
+
+# 红绿灯：只追加本模块字段，原巡线/绕桶/停车标定保持原值。
+light_brake_pwm: 8000
+light_brake_seconds: 0.8
+light_green_seconds: 0.5
+light_after_zebra_enabled: 1
+light_after_zebra_seconds: 3.0
+light_slow_pwm: 10700
+light_slow_settle_seconds: 0.3
+light_detect_interval_ms: 100

@@ -1,21 +1,9 @@
-// 红绿灯识别与旧版门控辅助类型；detect 返回 -1 红灯、0 未知、1 绿灯。
-// 当前 Suite 使用本文件 LightDetector，但实际等灯和制动逻辑写在 suite.hpp。
 #pragma once
 #include <opencv2/opencv.hpp>
-#include <chrono>
-// 保留的独立门控：输入时间为毫秒，红灯锁存，连续绿灯 500ms 放行。
-// 当前集成流程没有实例化此类型，而使用可配置 greenSeconds 的秒级计时。
-struct LightGate {
- bool stopped=false;long long green_since=-1;
- void update(int state,long long ms){
-  if(state<0){stopped=true;green_since=-1;}
-  else if(state==1&&stopped){if(green_since<0)green_since=ms;if(ms-green_since>=500)stopped=false;}
-  else if(state!=1)green_since=-1;
- }
-};
+// V2原颜色/亮芯算法：仅将类型重命名，保持检测实现和参数读取一致。
 // x/y/w/h 是整图宽高百分比；rs/rv 和 gs/gv 是红/绿 HSV 最小饱和度与亮度。
 // red/green 保存通过本算法筛选的像素数，用于状态日志和现场观察。
-struct LightDetector {
+struct NightLightDetector {
  int x=8,y=25,w=84,h=40,rs=60,rv=230,gs=30,gv=200,rmin=100,gmin=12;
  int red=0,green=0;cv::Rect roi;
  void load(const std::string& path){cv::FileStorage f(path,cv::FileStorage::READ);if(!f.isOpened())return;

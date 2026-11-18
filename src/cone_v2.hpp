@@ -1,5 +1,5 @@
-// 蓝色锥桶识别、目标跟踪与绕行决策；输入为 640×480 BGR 和巡线提供的边界。
-// outdoor_v2 使用 cone_fixed_maneuver 分段固定动作；识别只负责触发和锁定方向。
+// 锥桶识别、目标跟踪与绕行决策；输入为 640×480 BGR 和巡线提供的边界。
+// 室外按形状识别并使用连续视觉临时边界；室内保留蓝色识别和原有固定S动作。
 // 未开启时保留其他配置使用的旧直接转向/偏移分支。
 #pragma once
 #include "lane_v2.hpp"
@@ -12,76 +12,15 @@
 #include <string>
 #include <vector>
 
-// Coordinates/thresholds refer to the runtime's 640x480 camera frame.
-// Clearance is an IMAGE-SPACE tuning ratio, not measured physical clearance.
-// *_y 为图像底边行阈值，*_s/seconds 为秒，*_fraction 为图像中车道宽度比例。
-// clearance 是图像空间余量，不是实测厘米；turn_pwm 是直接转向时相对中心的修正量。
-struct ConeConfig {
-    int cone_fixed_maneuver=0,cone_fixed_side=0,cone_s_course_once=0;
-    double cone_rearm_seconds=.5;
-    FixedPlan fixedPlan;
-    int cone_direct_turn=0;
-    double cone_turn_pwm=5.,cone_turn_seconds=.65;
-    int cone_roi_top=280, cone_h_min=100, cone_h_max=130;
-    int cone_s_min=40, cone_v_min=55, cone_min_pixels=10;
-    int cone_min_height=4, cone_max_width=180, cone_confirm_frames=3;
-    double cone_aspect_min=0.55, cone_aspect_max=4.5, cone_fill_min=0.22;
-    double cone_avoid_start_y=340, cone_full_avoid_y=420, cone_pass_y=445;
-    double cone_clearance_fraction=0.18, cone_min_gap_fraction=0.025;
-    double cone_lost_grace_s=0.30, cone_approach_pixels=35, cone_approach_seconds=0.20;
-    double cone_close_depth_px=70, cone_smooth_seconds=0.10, cone_offset_rate=1.0;
-
-    double cone_start_blend=0.4, cone_confirm_seconds=0., cone_lane_extrapolation_px=320.;
-
-    void load(const cv::FileStorage& fs) {
-#define CONE_READ(k) if(!fs[#k].empty()) fs[#k] >> k
-        CONE_READ(cone_s_course_once);CONE_READ(cone_fixed_maneuver);CONE_READ(cone_fixed_side);CONE_READ(cone_rearm_seconds);
-        if(cone_fixed_maneuver)fixedPlan.load(fs,cone_s_course_once?"cone_s_steps":"cone_maneuver_steps");
-        CONE_READ(cone_direct_turn); CONE_READ(cone_turn_pwm); CONE_READ(cone_turn_seconds);
-        CONE_READ(cone_roi_top); CONE_READ(cone_h_min); CONE_READ(cone_h_max);
-        CONE_READ(cone_s_min); CONE_READ(cone_v_min); CONE_READ(cone_min_pixels);
-        CONE_READ(cone_min_height); CONE_READ(cone_max_width); CONE_READ(cone_confirm_frames);
-        CONE_READ(cone_aspect_min); CONE_READ(cone_aspect_max); CONE_READ(cone_fill_min);
-        CONE_READ(cone_avoid_start_y); CONE_READ(cone_full_avoid_y); CONE_READ(cone_pass_y);
-        CONE_READ(cone_clearance_fraction); CONE_READ(cone_min_gap_fraction);
-        CONE_READ(cone_lost_grace_s); CONE_READ(cone_approach_pixels); CONE_READ(cone_approach_seconds);
-        CONE_READ(cone_close_depth_px); CONE_READ(cone_smooth_seconds); CONE_READ(cone_offset_rate);
-        CONE_READ(cone_lane_extrapolation_px); CONE_READ(cone_start_blend); CONE_READ(cone_confirm_seconds);
-#undef CONE_READ
-        validate();
-    }
-    // 检查识别阈值、开始/充分绕行/通过的先后关系，以及时间、偏移和外推范围。
-    void validate() const {
-        if((cone_s_course_once!=0&&cone_s_course_once!=1)||(cone_s_course_once&&!cone_fixed_maneuver))
-            throw std::invalid_argument("cone_s_course_once requires cone_fixed_maneuver=1");
-        if((cone_fixed_maneuver!=0&&cone_fixed_maneuver!=1)||cone_fixed_side< -1||cone_fixed_side>1||
-           !std::isfinite(cone_rearm_seconds)||cone_rearm_seconds<0||cone_rearm_seconds>10)
-            throw std::invalid_argument("Invalid fixed cone settings");
-        if((cone_direct_turn!=0&&cone_direct_turn!=1)||!std::isfinite(cone_turn_pwm)||cone_turn_pwm<1||cone_turn_pwm>15||!std::isfinite(cone_turn_seconds)||cone_turn_seconds<.1||cone_turn_seconds>3)throw std::invalid_argument("Invalid direct cone turn settings");
-        const double vals[]={cone_aspect_min,cone_aspect_max,cone_fill_min,
-            cone_avoid_start_y,cone_full_avoid_y,cone_pass_y,cone_clearance_fraction,
-            cone_min_gap_fraction,cone_lost_grace_s,cone_approach_pixels,cone_approach_seconds,
-            cone_close_depth_px,cone_smooth_seconds,cone_offset_rate,cone_start_blend,cone_confirm_seconds,cone_lane_extrapolation_px};
-        for(double v:vals) if(!std::isfinite(v)) throw std::invalid_argument("Non-finite cone configuration");
-        if(cone_lane_extrapolation_px<0 || cone_lane_extrapolation_px>640 || cone_start_blend<0 || cone_start_blend>1 || cone_confirm_seconds<0 || cone_confirm_seconds>2 || cone_roi_top<0 || cone_roi_top>=480 || cone_h_min<0 || cone_h_max>179 || cone_h_min>cone_h_max ||
-           cone_s_min<0 || cone_s_min>255 || cone_v_min<0 || cone_v_min>255 ||
-           cone_min_pixels<3 || cone_min_height<2 || cone_max_width<cone_min_height || cone_max_width>640 ||
-           cone_confirm_frames<2 || cone_confirm_frames>60 || cone_aspect_min<=0 || cone_aspect_max<=cone_aspect_min ||
-           cone_fill_min<=0 || cone_fill_min>1 || cone_avoid_start_y<=cone_roi_top ||
-           cone_full_avoid_y<=cone_avoid_start_y || cone_pass_y<cone_full_avoid_y || cone_pass_y>480 ||
-           cone_clearance_fraction<=0 || cone_clearance_fraction>=0.45 ||
-           cone_min_gap_fraction<=0 || cone_min_gap_fraction>=0.3 ||
-           cone_lost_grace_s<=0 || cone_lost_grace_s>2 || cone_approach_pixels<=0 ||
-           cone_approach_seconds<=0 || cone_close_depth_px<0 || cone_close_depth_px>480 ||
-           cone_smooth_seconds<=0 || cone_offset_rate<=0 || cone_offset_rate>5)
-            throw std::invalid_argument("Invalid cone configuration");
-    }
-};
+#include "cone_config.hpp"
+#include "cone_lane_visual.hpp"
+#include "cone_shape.hpp"
 
 class ConeAvoidV2 {
     struct Candidate { cv::Rect box; int pixels; double bottom() const {return box.y+box.height;} };
     struct Interval { double lo,hi; };
     ConeConfig cfg;
+    ConeLaneVisual visual;
     bool tracking=false, confirmed=false, timeReady=false, exitEligible=false;
     int hits=0, side=0; // -1 passes on left; +1 passes on right; locked per tracked cone.
     double lastTime=0, lastSeen=0, firstSeen=0, minBottom=0, maxBottom=0;
@@ -118,6 +57,17 @@ class ConeAvoidV2 {
     // 随后按面积、宽高、填充率筛选；只有真实通道边界可信时才排除完全在通道外的候选。
     void detect(const cv::Mat& frame,const LaneV2& lane) {
         candidates.clear(); mask=cv::Mat::zeros(frame.size(),CV_8UC1);
+        if(cfg.cone_shape_mode){
+            ConeShapeDetector shape;
+            for(const auto& b:shape.detect(frame,cfg,mask)){
+                double l,r;if(bounds(lane,bottom(b),l,r)&&(b.br().x<l||b.x>r))continue;
+                candidates.push_back({b,b.area()});
+            }
+            std::sort(candidates.begin(),candidates.end(),[](const Candidate& a,const Candidate& b){
+                return a.bottom()!=b.bottom()?a.bottom()>b.bottom():a.pixels>b.pixels;
+            });
+            return;
+        }
         cv::Mat hsv,roiMask;
         const cv::Rect roi(0,cfg.cone_roi_top,frame.cols,frame.rows-cfg.cone_roi_top);
         cv::cvtColor(frame(roi),hsv,cv::COLOR_BGR2HSV);
@@ -223,12 +173,21 @@ class ConeAvoidV2 {
 public:
     // 公开结果由 Suite 消费：directTurning 请求固定舵机修正，holdStop 请求电机中位。
     // offsetFraction 请求相对车道宽度的目标偏移；passedCount 可解锁后续停车模块。
+    bool laneMode()const {return cfg.cone_lane_mode!=0;}
+    bool laneOverride()const {return laneMode()&&visual.controlling();}
+    double laneErrorDelta()const {return visual.errorDelta;}
+    bool laneCompleted()const {return laneMode()&&visual.completed();}
+    void laneFeedback(bool moving){if(laneMode())visual.feedback(moving);}
+    const ConeLaneVisual& laneVisual()const {return visual;}
     bool sCourseCompleted()const {return sCompleted;}
     std::string fixedPhase()const {
         return cfg.cone_s_course_once?std::string("S_")+(side>0?"RIGHT_":"LEFT_")+fixed.phase():"FIXED_"+fixed.phase();
     }
     bool fixedTurning=false;
+    size_t fixedStepNumber()const {return fixed.active()?fixed.stepNumber():0;}
     bool fixedMode()const {return cfg.cone_fixed_maneuver!=0;}
+    // 固定 S 的转向来源只有：本轮锁定的 side × 当前 YAML 段的 steer。
+    // 此处不读取 lane_error、不做 PD；Suite 再用 center-correction 得到 PWM。
     double fixedCorrection()const {return fixedTurning?side*fixed.step().steer:0.;}
     int fixedMotor()const {return fixed.step().motor;}
     double fixedRemaining()const {return fixed.remaining();}
@@ -243,10 +202,11 @@ public:
     double offsetFraction=0;
     int passedCount=0;
     int hitCount() const {return hits;}
-    explicit ConeAvoidV2(ConeConfig c=ConeConfig()):cfg(c) {cfg.validate();}
+    explicit ConeAvoidV2(ConeConfig c=ConeConfig()):cfg(c),visual(c) {cfg.validate();}
 
     // 时间必须单调；用于偏移平滑的 dt 限制在 0..0.1 秒，识别状态仍使用实际时间差。
-    // 每次调用先重新检测候选，再按所选绕桶模式推进状态。
+    // 一次触发 S 分三种状态：触发前识别/确认 → 启动后只按时间走表 → 完成锁存。
+    // 启动前的距离判断是图像坐标条件，不是厘米；不锁定相同的物理起步位置或车头角度。
     void update(const cv::Mat& frame,const LaneV2& lane,double timeSeconds,bool canStart=true) {
         if(frame.empty() || frame.type()!=CV_8UC3 || frame.cols!=640 || frame.rows!=480 || !std::isfinite(timeSeconds))
             throw std::invalid_argument("ConeAvoidV2 requires BGR 640x480 and finite time");
@@ -254,15 +214,26 @@ public:
         double dt=timeReady ? clamp(timeSeconds-lastTime,0.0,0.1) : 1.0/30;
         timeReady=true; lastTime=timeSeconds; holdStop=false;
         // 室内一次触发 S 路线：启动后完全跳过锥桶检测，不跟踪/确认第二桶。
+        // 所有帧仍由主循环驱动，但这里不再看桶、不等待第二桶，也不因丢线改段。
         // 全部动作结束即恢复巡线，不等待目标消失；完成锁存到程序重启。
         if(cfg.cone_s_course_once&&fixedStarted){
             fixed.tick(timeSeconds);offsetFraction=0;directTurning=false;
             fixedTurning=fixed.active();candidates.clear();mask=cv::Mat::zeros(frame.size(),CV_8UC1);
             if(fixedTurning){phase=fixedPhase();return;}
+            // S_DONE / passed=1 只表示动作表走完，不表示视觉确认绕桶或车身回正。
             if(!sCompleted){++passedCount;sCompleted=true;clearTrack();}
             phase="S_DONE";return;
         }
-        detect(frame,lane);
+        if(laneMode()&&visual.searchFinished()){
+            candidates.clear();mask=cv::Mat::zeros(frame.size(),CV_8UC1);
+        }else detect(frame,lane);
+        if(laneMode()){
+            std::vector<cv::Rect> observations;for(const auto& c:candidates)observations.push_back(c.box);
+            visual.update(observations,lane,timeSeconds,canStart);
+            active=visual.controlling();near=visual.near;holdStop=false;box=visual.box;
+            offsetFraction=visual.offset;passedCount=visual.passed;phase=visual.phase;
+            fixedTurning=directTurning=false;return;
+        }
         // 直接转向分支：确认目标接近后，按桶在车道中线哪侧，锁定从另一侧通过。
         // 该模式允许使用常规单侧边缘补位计算中线，不使用下面的双真实边界通道停走条件。
         if(cfg.cone_fixed_maneuver){
@@ -277,6 +248,7 @@ public:
                     trackedBox=candidates[found].box;lastSeen=timeSeconds;++hits;
                 }else if(!confirmed){hits=0;firstSeen=timeSeconds;}
             }
+            // 首桶候选达到连续确认条件，且框底边达到起绕像素行，才允许触发。
             box=trackedBox;near=bottom(box)>=cfg.cone_avoid_start_y;
             confirmed=confirmed||(hits>=cfg.cone_confirm_frames&&timeSeconds-firstSeen+1e-9>=cfg.cone_confirm_seconds);
             active=confirmed;
@@ -284,6 +256,8 @@ public:
                 if(timeSeconds-lastSeen>cfg.cone_lost_grace_s){clearTrack();phase="SEARCH";return;}
                 if(!confirmed||!near||!canStart){phase=confirmed?"FAR":"CONFIRM";return;}
                 double mid=(lane.leftAt(bottom(box))+lane.rightAt(bottom(box)))*.5;
+                // 非零 cone_fixed_side 强制方向；0 才根据桶相对车道中线的位置选反侧。
+                // side 在本轮 S 内不再修改；例如 fixed_side=1 始终使用计划右绕。
                 side=cfg.cone_fixed_side?cfg.cone_fixed_side:(centerX(box)<=mid?1:-1);
                 fixed.start(cfg.fixedPlan,timeSeconds);fixedStarted=true;
             }
@@ -402,10 +376,14 @@ public:
         }
     }
     // 绘制所有候选和当前跟踪框，显示阶段、通过计数与横向偏移；红框表示请求停车。
-    void draw(cv::Mat& image) const {
-        for(const Candidate& c:candidates) cv::rectangle(image,c.box,cv::Scalar(150,100,0),1);
-        if(box.area()>0) cv::rectangle(image,box,holdStop?cv::Scalar(0,0,255):cv::Scalar(255,220,0),2);
-        std::string text="CONE "+phase+" pass="+std::to_string(passedCount)+" offset="+cv::format("%.3f",offsetFraction);
+    void draw(cv::Mat& image,const std::string& displayedPhase="") const {
+        if(laneMode())visual.draw(image);
+        else{
+            for(const Candidate& c:candidates) cv::rectangle(image,c.box,cv::Scalar(150,100,0),1);
+            if(box.area()>0) cv::rectangle(image,box,holdStop?cv::Scalar(0,0,255):cv::Scalar(255,220,0),2);
+        }
+        // Test stops can override the next internal phase before it reaches Output.
+        std::string text="CONE "+(displayedPhase.empty()?phase:displayedPhase)+" pass="+std::to_string(passedCount)+(laneMode()?"/"+std::to_string(cfg.cone_lane_count):"")+" offset="+cv::format("%.3f",offsetFraction);
         cv::putText(image,text,cv::Point(5,49),cv::FONT_HERSHEY_SIMPLEX,0.43,
                     holdStop?cv::Scalar(0,0,255):cv::Scalar(255,255,0),1,cv::LINE_AA);
     }

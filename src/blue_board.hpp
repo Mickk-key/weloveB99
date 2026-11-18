@@ -9,15 +9,17 @@
 // ROI 门槛和最小尺寸是 640×480 原图像素；fill 为轮廓占旋转外接矩形的面积比。
 // 确认同时要求帧数和观察秒数，参数从当前环境 YAML 读取。
 struct BoardConfig {
+    int board_pixel_mode=0,board_min_pixels=8000;
     int board_h_min=100,board_h_max=130,board_s_min=40,board_v_min=55;
     int board_roi_top=100,board_roi_left=64,board_roi_right=576;
     int board_min_area=1500,board_min_width=40,board_min_height=25,board_confirm_frames=5;
     double board_min_fill=.82,board_min_aspect=.8,board_max_aspect=5,board_confirm_seconds=.15;
     void load(const cv::FileStorage& f){
 #define B(n) if(!f[#n].empty()) f[#n]>>n
-        B(board_h_min);B(board_h_max);B(board_s_min);B(board_v_min);B(board_roi_top);B(board_roi_left);B(board_roi_right);
+        B(board_pixel_mode);B(board_min_pixels);B(board_h_min);B(board_h_max);B(board_s_min);B(board_v_min);B(board_roi_top);B(board_roi_left);B(board_roi_right);
         B(board_min_area);B(board_min_width);B(board_min_height);B(board_confirm_frames);B(board_min_fill);B(board_min_aspect);B(board_max_aspect);B(board_confirm_seconds);
 #undef B
+        if((board_pixel_mode!=0&&board_pixel_mode!=1)||board_min_pixels<100||board_min_pixels>307200)throw std::runtime_error("Invalid board pixel settings");
         if(board_h_min<0||board_h_max>179||board_h_min>board_h_max||board_s_min<0||board_s_min>255||board_v_min<0||board_v_min>255||board_roi_top<0||board_roi_top>400||board_roi_left<0||board_roi_right>640||board_roi_right-board_roi_left<80||board_min_area<100||board_min_area>300000||board_min_width<5||board_min_height<5||board_confirm_frames<2||board_confirm_frames>60||!std::isfinite(board_min_fill)||board_min_fill<.6||board_min_fill>1||!std::isfinite(board_min_aspect)||!std::isfinite(board_max_aspect)||board_min_aspect<=0||board_max_aspect<board_min_aspect||!std::isfinite(board_confirm_seconds)||board_confirm_seconds<.05||board_confirm_seconds>3)throw std::runtime_error("Invalid blue board configuration");
     }
 };
@@ -35,7 +37,17 @@ public:
         // Detect full silhouettes before gating their centers, so ROI clipping cannot turn a cone into a rectangle.
         std::vector<std::vector<cv::Point>> contours;cv::findContours(mask.clone(),contours,cv::RETR_EXTERNAL,cv::CHAIN_APPROX_SIMPLE);
         candidate=false;box={};double best=0;
-        for(const auto& contour:contours){
+        if(c.board_pixel_mode){
+            cv::Mat labels,stats,centroids;
+            int count=cv::connectedComponentsWithStats(mask,labels,stats,centroids,8,CV_32S);
+            for(int i=1;i<count;++i){
+                int pixels=stats.at<int>(i,cv::CC_STAT_AREA);
+                cv::Rect r(stats.at<int>(i,cv::CC_STAT_LEFT),stats.at<int>(i,cv::CC_STAT_TOP),stats.at<int>(i,cv::CC_STAT_WIDTH),stats.at<int>(i,cv::CC_STAT_HEIGHT));
+                if(pixels<c.board_min_pixels||r.x+r.width/2<c.board_roi_left||r.x+r.width/2>c.board_roi_right||r.y+r.height/2<c.board_roi_top)continue;
+                if(pixels>best){best=pixels;box=r;candidate=true;}
+            }
+        }
+        if(!c.board_pixel_mode)for(const auto& contour:contours){
             auto r=cv::boundingRect(contour);double area=cv::contourArea(contour),aspect=double(r.width)/r.height;
             if(area<c.board_min_area||r.width<c.board_min_width||r.height<c.board_min_height||aspect<c.board_min_aspect||aspect>c.board_max_aspect)continue;
             if(r.x<=0||r.y<=0||r.br().x>=640||r.br().y>=480)continue; // incomplete shape cannot certify a board

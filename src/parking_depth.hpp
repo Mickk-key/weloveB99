@@ -13,7 +13,7 @@ namespace depth_parking {
 // 此命名空间内保留旧停车入口所用的巡线标定结构；不要与全局室内 LaneConfig 混淆。
 // 当前 Suite 直接从 drive 同步 PD/舵机/中位等字段，未调用下方固定标定 load。
 struct LaneConfig {
-    double lane_pd_kp=.2,lane_pd_kd=.5,servo_center=80,servo_min=55,servo_max=86;
+    double lane_pd_kp=.2,lane_pd_kd=.5,servo_center=78,servo_min=55,servo_max=86;
     int neutral_pwm=10000,start_pwm=11000,corner_pwm=11500,corner_fast_pwm=12000,after_corner_pwm=10900;
     int gear=1,start_s=2,corner_end_s=27,zebra_brake_pwm=9000,zebra_test_brake_ms=800;
     int set_auto_exposure=3,set_exposure=1500;
@@ -29,7 +29,7 @@ struct LaneConfig {
 #define R(n) s[#n]>>n
         R(neutral_pwm);R(start_pwm);R(corner_pwm);R(corner_fast_pwm);R(after_corner_pwm);R(gear);R(start_s);R(corner_end_s);
 #undef R
-        if(lane_pd_kp!=.2||lane_pd_kd!=.5||servo_center!=80||servo_min!=55||servo_max!=86||neutral_pwm!=10000||zebra_brake_pwm!=9000||zebra_test_brake_ms!=800)
+        if(lane_pd_kp!=.2||lane_pd_kd!=.5||servo_center!=78||servo_min!=55||servo_max!=86||neutral_pwm!=10000||zebra_brake_pwm!=9000||zebra_test_brake_ms!=800)
             throw std::runtime_error("Protected calibration differs; review baseline before running");
     }
 };
@@ -126,12 +126,12 @@ public:
         o.ambiguousBoard=left&&right;return o;
     }
 };
-struct ParkingCommand {int motor=10000,steer=80;std::string state="WAIT",reason;double error=0,remaining=-1;int openSide=0;};
+struct ParkingCommand {int motor=10000,steer=78;std::string state="WAIT",reason;double error=0,remaining=-1;int openSide=0;};
 // 状态顺序：WAIT 等待 → SEEK 搜索 → ALIGN 选侧对齐 → ENTER 入位 → BRAKE → DONE。
 // FAULT 锁存异常；所需停车指令还会经过 Suite 的交通停车等优先级仲裁。
 class ParkingController {
     enum Phase {WAIT,SEEK,ALIGN,ENTER,BRAKE,DONE,FAULT} phase=WAIT;
-    OriginalPd pd;int side=0,candidate=0,boardHits=0,entryHits=0,lastMotor=10000,lastSteer=80;
+    OriginalPd pd;int side=0,candidate=0,boardHits=0,entryHits=0,lastMotor=10000,lastSteer=78;
     double parkingStart=-1;
     double now=0,runStart=-1,remaining=-1,entryEstimate=-1,blindDistance=0,brakeStart=0,lastParkError=0;
     std::string fault;double faultBrakeStart=-1;bool faultNeedsBrake=false;

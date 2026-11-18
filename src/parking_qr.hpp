@@ -11,6 +11,11 @@ struct ParkingQrObservation {
     cv::Rect box;
 };
 struct Parking {
+    int parking_wait_side_pwm=10500;
+    int parking_reverse_pwm=9000;
+    double parking_reverse_seconds=0.3,reverseUntil=-1;
+    bool yellowMode=false;int parking_yellow_fixed_entry=0;
+    bool timedStop=false; // timed: blue-board selection, fixed entry, latched stop; no QR/edge feedback
     // 选定挡板反侧后持续沿该边线走，不执行定时绕行或回中。
     int parking_edge_follow=0,parking_follow_pwm=10900;
     double parking_edge_margin_fraction=.18,edgeError=0;
@@ -20,7 +25,7 @@ struct Parking {
     int parking_edge_entry=0,parking_qr_async=0;
     double parking_heading_kp=0,edgeHeading=0,qrValidSince=0,lastQrAt=-1;
     FixedPlan entryPlan;FixedManeuver entry;bool entryStarted=false,deferQr=false;
-    bool entryControl()const {return parking_edge_follow&&parking_edge_entry&&entryStarted&&entry.active()&&!hold&&!stopped;}
+    bool entryControl()const {return (yellowMode?parking_yellow_fixed_entry:(timedStop||(parking_edge_follow&&parking_edge_entry)))&&entryStarted&&entry.active()&&!hold&&!stopped;}
     double entryCorrection()const {return side*entry.step().steer;}
     int entryMotor()const {return entry.step().motor;}
     void entryFeedback(bool applied){entry.feedback(applied);}
@@ -33,7 +38,7 @@ struct Parking {
         return std::max(-parking_steer_limit,std::min(parking_steer_limit,parking_pd_kp*edgeError+parking_heading_kp*edgeHeading+parking_pd_kd*change));
     }
     double edgeWidthA=0,edgeWidthB=0;bool edgeWidthReady=false;
-    bool edgeControl()const {return parking_edge_follow&&side&&!hold&&!stopped&&(!parking_edge_entry||entry.done());}
+    bool edgeControl()const {return !yellowMode&&!timedStop&&parking_edge_follow&&side&&!hold&&!stopped&&(!parking_edge_entry||entry.done());}
     bool edgeBounds(const LaneV2& lane,double y,double& l,double& r)const {
         double w=edgeWidthA*y+edgeWidthB;
         bool haveWidth=edgeWidthReady&&std::isfinite(w)&&w>=10&&w<=1280;
@@ -91,12 +96,14 @@ struct Parking {
     double parking_maneuver_start_y=340.,parking_qr_seek_steer=0.;
     FixedPlan fixedPlan;FixedManeuver fixed;
     bool fixedStarted=false;
-    bool fixedControl()const {return !parking_edge_follow&&parking_fixed_maneuver&&fixedStarted&&!hold&&!stopped;}
+    bool fixedControl()const {return !yellowMode&&!parking_edge_follow&&parking_fixed_maneuver&&fixedStarted&&!hold&&!stopped;}
     double fixedCorrection()const {return side*(fixed.active()?fixed.step().steer:parking_qr_seek_steer);}
     int fixedMotor()const {return fixed.active()?fixed.step().motor:parking_qr_seek_pwm;}
     double fixedRemaining()const {return fixed.remaining();}
     void fixedFeedback(bool applied){fixed.feedback(applied);}
     void validateFixedMotor(int neutral)const {
+        if(parking_reverse_pwm<3000||parking_reverse_pwm>=neutral||!std::isfinite(parking_reverse_seconds)||parking_reverse_seconds<0||parking_reverse_seconds>2)throw std::runtime_error("Invalid parking reverse: pwm 3000..<neutral, seconds 0..2");
+        if(parking_wait_side_pwm<neutral||parking_wait_side_pwm>12000)throw std::runtime_error("parking_wait_side_pwm must be between neutral and 12000");
         if(parking_edge_entry)entryPlan.validateMotor(neutral,"parking_edge_entry_steps");
         if(parking_edge_follow&&parking_follow_pwm<=neutral)throw std::runtime_error("parking_follow_pwm must exceed neutral");
         if(parking_fixed_maneuver){fixedPlan.validateMotor(neutral,"parking_maneuver_steps");
@@ -115,16 +122,20 @@ struct Parking {
     int qr_panel_v_min=110,qr_panel_s_max=80;
     // 仅加载存在的字段，并验证阈值、确认帧数和放大倍率；这里不改变巡线参数。
     void load(const cv::FileStorage& f){
+        std::string mode; if(!f["parking_mode"].empty())f["parking_mode"]>>mode; timedStop=mode=="timed";
 #define F(n) if(!f[#n].empty())f[#n]>>n
-        F(parking_edge_follow);F(parking_follow_pwm);F(parking_edge_margin_fraction);
+        F(parking_reverse_pwm);F(parking_reverse_seconds);F(parking_wait_side_pwm);F(parking_edge_follow);F(parking_follow_pwm);F(parking_edge_margin_fraction);
         F(parking_edge_entry);F(parking_qr_async);F(parking_heading_kp);
+        F(parking_yellow_fixed_entry);
         F(parking_shift_rate);F(parking_pd_kp);F(parking_pd_kd);F(parking_steer_limit);F(parking_steer_rate);F(parking_error_smooth_seconds);
         F(parking_fixed_maneuver);F(parking_fixed_side);F(parking_maneuver_start_y);
         F(parking_qr_seek_pwm);F(parking_qr_seek_steer);
 #undef F
         if((parking_edge_entry!=0&&parking_edge_entry!=1)||(parking_qr_async!=0&&parking_qr_async!=1)||
+           (parking_yellow_fixed_entry!=0&&parking_yellow_fixed_entry!=1)||
            (parking_edge_entry&&!parking_edge_follow)||!std::isfinite(parking_heading_kp)||parking_heading_kp<0||parking_heading_kp>3)
             throw std::runtime_error("Invalid parking entry/heading/async configuration");
+        if(timedStop&&!parking_edge_entry)throw std::runtime_error("Timed parking requires parking_edge_entry=1");
         if(parking_edge_entry){
             entryPlan.load(f,"parking_edge_entry_steps");
             if(entryPlan.steps.size()!=3||entryPlan.steps[0].steer<=0||entryPlan.steps[1].steer>=0||entryPlan.steps[2].steer!=0)
@@ -205,7 +216,7 @@ struct Parking {
         double dt=last<0?0:std::max(0.0,std::min(.1,now-last));last=now;hold=false;
         if(parking_fixed_maneuver)fixed.tick(now);
         if(parking_edge_entry)entry.tick(now);
-        if(stopped){state="QR_STOP_LATCHED";return;}
+        if(stopped){state=timedStop?"PARK_TIMED_STOP":"QR_STOP_LATCHED";return;}
         if(board.candidate)boardGroundY=board.box.br().y;
         // 只有挡板已确认、当前仍可见且两侧真实车道线有效时，才按挡板位于哪半边提出反侧。
         // 靠近中线死区或车道过窄时不选侧；同一非零提案连续达到帧数后锁定。
@@ -224,6 +235,26 @@ struct Parking {
             // Keep moving while board-side recognition is unresolved.
             if(board.stopped&&!side){hold=false;state="WAIT_BOARD_SIDE";return;}
             if(!side){state="SEARCH_BOARD";return;}
+        }
+        if(yellowMode){
+            if(parking_yellow_fixed_entry){
+                if(!entryStarted){if(!canStart){state="PARK_ENTRY_READY";return;}
+                    entry.start(entryPlan,now);entryStarted=true;}
+                if(!entry.done()){state="PARK_SHIFT_"+entry.phase();return;}
+            }
+            state="PARK_FOLLOW";return;
+        }
+        if(timedStop){
+            if(!entryStarted){
+                if(!canStart){state="PARK_ENTRY_READY";return;}
+                entry.start(entryPlan,now);entryStarted=true;
+            }
+            if(entry.done()){
+                if(reverseUntil<0)reverseUntil=now+parking_reverse_seconds;
+                if(now<reverseUntil){state="PARK_TIMED_REVERSE";return;}
+                stopped=true;state="PARK_TIMED_STOP";return;
+            }
+            state="PARK_TIMED_"+entry.phase();return;
         }
         if(parking_edge_follow){
             // 挡板消失后仍锁定同一侧，持续跟随边线，不回中。
@@ -277,7 +308,7 @@ struct Parking {
         ParkingQrObservation seen;seen.ready=true;seen.found=found;seen.side=side;seen.capturedAt=now;seen.box=box;return seen;
     }
     void applyQR(const ParkingQrObservation& seen,double now){
-        if(!seen.ready||hold||stopped||!side)return;
+        if(yellowMode||timedStop||!seen.ready||hold||stopped||!side)return;
         // 每个后台结果只消费一次；过期/丢线前/其他侧别结果不能累计终停确认。
         if(deferQr&&(seen.side!=side||seen.capturedAt<qrValidSince||seen.capturedAt<=lastQrAt||now-seen.capturedAt>2.)){
             qrHits=0;previousQR={};return;

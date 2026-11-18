@@ -20,6 +20,8 @@
 #include <vector>
 #include <deque>
 #include <sstream>
+#include <memory>
+#include "gpio_guard.hpp"
 #include "async_console.hpp"
 #include <unistd.h>
 #include <limits.h>
@@ -30,15 +32,16 @@ using namespace std;using namespace cv;
 int lane_left_count=0,lane_right_count=0;
 // Keep the existing camera, GPIO calibration, timed throttle and neutral cleanup.
 // Runtime owns the camera and GPIO. Single-side image-edge fallback is preserved.
-// PWM 数值按现有硬件标定使用：电机中位默认 10000，舵机中心默认 80。
+// 电机命令直接写入 GPIO13 的 200 Hz、range 40000 PWM。
 // 默认值会被 YAML 覆盖；watchdog_ms 为毫秒，steer_rate 为每秒舵机 PWM 变化量。
 struct Settings {
+
     double pd_limit=15;
     int control_watchdog_enabled=0,control_watchdog_ms=300;
     double cone_pd_kp=.35,cone_pd_kd=.2,cone_min_correction=1.;
     string camera_device;int width=640,height=480,set_auto_exposure=3,set_exposure=1500;
     int camera_home_enabled=0,camera_pan_pwm=75,camera_tilt_pwm=65;
-    double lane_pd_kp=.2,lane_pd_kd=.5,servo_center=80,servo_min=55,servo_max=86;
+    double lane_pd_kp=.2,lane_pd_kd=.5,servo_center=78,servo_min=55,servo_max=86;
     int neutral_pwm=10000,start_pwm=11000,corner_pwm=11500,corner_fast_pwm=12000,corner_brake_pwm=7500,after_corner_pwm=10900;
     int gear=1,start_s=2,corner_end_s=27,corner_brake_s=1;
     int cone_slow_pwm=10900;double steer_rate=40;
@@ -58,7 +61,7 @@ Settings load_settings(const string& path){
 #undef S
     if(c.camera_device.empty()||c.width!=640||c.height!=480)throw runtime_error("Original lane requires configured camera and 640x480");
     for(int p:{c.neutral_pwm,c.start_pwm,c.corner_pwm,c.corner_fast_pwm,c.corner_brake_pwm,c.after_corner_pwm})
-        if(p<7000||p>12000)throw runtime_error("PWM outside 7000..12000");
+        if(p<3000||p>12000)throw runtime_error("PWM outside 3000..12000");
     if(!isfinite(c.lane_pd_kp)||!isfinite(c.lane_pd_kd)||c.lane_pd_kp<0||c.lane_pd_kd<0||c.servo_min<55||c.servo_max>86||!(c.servo_min<=c.servo_center&&c.servo_center<=c.servo_max))throw runtime_error("Invalid PD/steering settings");
     if((c.gear!=1&&c.gear!=2&&c.gear!=10)||c.start_s<0||c.corner_end_s<c.start_s||c.corner_brake_s<0)throw runtime_error("Invalid original throttle timing");
     if((c.camera_home_enabled!=0&&c.camera_home_enabled!=1)||c.camera_pan_pwm<50||c.camera_pan_pwm>100||c.camera_tilt_pwm<50||c.camera_tilt_pwm>100)throw runtime_error("Camera home PWM must be in 50..100");
@@ -96,8 +99,15 @@ int lane_throttle(long long driving_ms,const Settings& c){
     return c.after_corner_pwm;
 }
 // 信号处理只置位；主循环和监控线程读取标志，再执行正常退出和中位清理。
-volatile sig_atomic_t interrupted=0;
-void on_signal(int){interrupted=1;}
+static_assert(ATOMIC_INT_LOCK_FREE==2,"Signal flag must be lock-free");
+std::atomic<int> interrupted{0};
+void on_signal(int value){interrupted.store(value,std::memory_order_relaxed);}
+void install_signal_handlers(){
+    // With pigpio's internal handlers disabled, a broken log pipe must also stop
+    // through our cleanup path instead of terminating the process immediately.
+    for(int value:{SIGINT,SIGTERM,SIGHUP,SIGPIPE})
+        if(signal(value,on_signal)==SIG_ERR)throw runtime_error("Cannot install shutdown signal handler");
+}
 using Clock=chrono::steady_clock;
 const char* phase_name(int p){
     switch(p){case 1:return "CAPTURE";case 2:return "LANE";case 3:return "CONE";case 4:return "CONTROL";case 5:return "PREVIEW";default:return "IDLE";}
@@ -106,19 +116,38 @@ const char* phase_name(int p){
 // 同一把互斥锁保护主线程 send 与监控线程的停车操作，避免同时写电机。
 struct Output {
     Settings c;bool enabled=false,gpio_active=false,gimbal_active=false;mutex lock;atomic<bool> done{false},brake_done{false};atomic<int> aborted{0};
+    atomic<int> motor_pulse_us{0},io_error{0};
+#ifdef RACE_PI
+    unique_ptr<MotionGuard> guard;
+#endif
     atomic<int> phase{0},stale_phase{0},stale_ms{0};
     bool moving=false,braking=false;string activeBrakeState;Clock::time_point last=Clock::now(),deadline;thread watcher;
-    void neutral(){if(enabled){gpioPWM(13,c.neutral_pwm);gpioPWM(12,int(c.servo_center));}moving=false;braking=false;}
-    Output(const Settings& settings,bool motion,bool home_camera=false):c(settings){
+    double run_seconds=0;Clock::time_point run_deadline;
+    bool write_commands(int motor,int steer){
+        if(!enabled)return true;
+        int a=gpioPWM(13,motor),b=gpioPWM(12,steer);
+        if(a>=0)motor_pulse_us=0;
+        if(a<0||b<0){io_error=a<0?a:b;aborted=5;return false;}
+        return true;
+    }
+    void neutral(){write_commands(c.neutral_pwm,int(c.servo_center));moving=false;braking=false;}
+    Output(const Settings& settings,bool motion,bool home_camera=false,double max_run_seconds=0):c(settings),run_seconds(max_run_seconds){
         try{
         // 只有显式运动或回位请求才初始化 pigpio；先拒绝与现有 GPIO 控制进程同时运行。
         // GPIO12 是转向，GPIO13 是电机，各自 PWM 频率和量程按现有标定设置。
         if(motion||home_camera){
-            //if(system("pgrep -f '/network-rc/lib/[g]pio.js|[p]igpiod' >/dev/null")==0)throw runtime_error("Stop other GPIO controllers first");
+#ifdef RACE_PI
+            guard.reset(new MotionGuard);
+#endif
+            if(interrupted)throw runtime_error("Interrupted before GPIO initialization");
+            // Keep our SIGINT/SIGTERM handler. pigpio's default handler skips C++ cleanup.
+            if(gpioCfgSetInternals(gpioCfgGetInternals()|PI_CFG_NOSIGHANDLER)<0)throw runtime_error("Cannot preserve application signal handlers");
             if(gpioInitialise()<0)throw runtime_error("GPIO init failed");gpio_active=true;enabled=motion;
             if(motion){
-                gpioSetMode(12,PI_OUTPUT);gpioSetPWMfrequency(12,50);gpioSetPWMrange(12,1000);
-                gpioSetMode(13,PI_OUTPUT);gpioSetPWMfrequency(13,200);gpioSetPWMrange(13,40000);neutral();
+                if(gpioSetMode(12,PI_OUTPUT)<0||gpioSetPWMfrequency(12,50)!=50||gpioSetPWMrange(12,1000)<0||gpioSetMode(13,PI_OUTPUT)<0||gpioSetPWMfrequency(13,200)!=200||gpioSetPWMrange(13,40000)<0)
+                    throw runtime_error("GPIO setup failed");
+                neutral();if(io_error)throw runtime_error("Initial motor neutral failed");
+                cout<<"[MOTOR] protocol=pwm frequency_hz=200 range=40000 neutral="<<c.neutral_pwm<<" GPIO13; signal_cleanup=ON"<<endl;
             }
             // Preserve the user-set camera pose by default. Explicit camera homing is opt-in.
             // 支架回位只在此条件成立时触发 GPIO22/23；默认 camera_home_enabled=0 保留手调姿态。
@@ -136,13 +165,14 @@ struct Output {
         }
         // 每约 5 毫秒检查退出信号、可选控制超时和反向制动截止时间。
         // 看门狗开关只控制更新超时检查；制动脉冲到期归中位不依赖这个开关。
+        run_deadline=Clock::now()+chrono::milliseconds(std::llround(run_seconds*1000));
         watcher=thread([this]{while(!done){
             {lock_guard<mutex> guard(lock);auto now=Clock::now();
-             int reason=interrupted?3:c.control_watchdog_enabled&&moving&&now-last>chrono::milliseconds(c.control_watchdog_ms)?2:0;
+             int reason=interrupted?3:run_seconds>0&&now>=run_deadline?4:c.control_watchdog_enabled&&moving&&now-last>chrono::milliseconds(c.control_watchdog_ms)?2:0;
              if(reason){if(!aborted){stale_phase=phase.load();stale_ms=int(chrono::duration_cast<chrono::milliseconds>(now-last).count());aborted=reason;}neutral();}
              else if(braking&&now>=deadline){neutral();brake_done=true;}}
             this_thread::sleep_for(chrono::milliseconds(5));
-        }});}catch(...){neutral();if(gimbal_active){gpioPWM(22,0);gpioPWM(23,0);}if(gpio_active)gpioTerminate();throw;}
+        }});}catch(...){finish();throw;}
     }
     // 每帧刷新控制心跳；若此前已经中止或本帧发现更新超时，立即归中位并停止主循环。
     // brakeRemaining>=0 且 motor<neutral_pwm 才作为有截止时间的反向制动处理。
@@ -163,11 +193,27 @@ struct Output {
             else deadline=std::min(deadline,requested); // A slow/repeated frame cannot extend the pulse.
         }else{activeBrakeState.clear();brake_done=false;}
         moving=motor!=c.neutral_pwm;braking=timedBrake;
-        if(enabled){gpioPWM(13,motor);gpioPWM(12,steer);}return true;
+        if(!write_commands(motor,steer)){neutral();return false;}return true;
     }
     // 先停止并等待监控线程，再归中位和释放 GPIO；析构也调用此函数用于异常收尾。
     // 只有本对象初始化过的 GPIO 才会被终止。
-    void finish(){done=true;if(watcher.joinable())watcher.join();neutral();if(gpio_active){if(enabled)this_thread::sleep_for(chrono::milliseconds(300));if(gimbal_active){gpioPWM(22,0);gpioPWM(23,0);}gpioTerminate();gpio_active=false;enabled=false;gimbal_active=false;}}
+    void finish(){
+        done=true;if(watcher.joinable())watcher.join();
+        if(gpio_active){
+            neutral();
+            if(enabled){
+                this_thread::sleep_for(chrono::milliseconds(500));
+                int stopped=gpioPWM(13,0);gpioPWM(12,0);motor_pulse_us=0;
+                if(stopped<0)io_error=stopped;
+            }
+            if(gimbal_active){gpioPWM(22,0);gpioPWM(23,0);}
+            gpioTerminate();gpio_active=false;enabled=false;gimbal_active=false;
+            cout<<"[MOTOR_STOP] neutral_pwm="<<c.neutral_pwm<<" hold_ms=500 output_disabled="<<(io_error?0:1)<<endl;
+        }
+#ifdef RACE_PI
+        guard.reset();
+#endif
+    }
     ~Output(){finish();}
 };
 // 图片先写临时文件，再重命名发布，供需要完整图片快照的调用方使用。
