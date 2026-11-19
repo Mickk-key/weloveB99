@@ -15,11 +15,11 @@ servo_min: 55
 servo_max: 86
 speed:
   neutral_pwm: 10000  # GPIO13 直接 PWM 停车控制值
-  start_pwm: 10900  # 独立原版巡线：起步阶段
-  corner_pwm: 10900  # 独立原版巡线：gear=1 弯道阶段
+  start_pwm: 11000  # 独立原版巡线：起步阶段
+  corner_pwm: 11000  # 独立原版巡线：gear=1 弯道阶段
   corner_fast_pwm: 12000  # 独立原版巡线：gear=2，原2200偏移经限幅后实际为12000
   corner_brake_pwm: 7500  # 原版制动值；低于停车中位，不是普通停车命令
-  after_corner_pwm: 10900  # 独立原版巡线：弯道阶段结束后
+  after_corner_pwm: 11000  # 独立原版巡线：弯道阶段结束后
   gear: 1  # 独立原版的挡位选择，默认1
   start_s: 2  # 独立原版起步阶段秒数
   corner_end_s: 27  # 独立原版弯道阶段结束时刻，从开始运行计秒
@@ -69,15 +69,15 @@ cone_shape_min_width: 8
 cone_shape_top_ratio: 0.65
 
 # 蓝挡板：发车与终点使用独立状态；同一组现有识别阈值。
-board_h_min: 100
-board_h_max: 130
-board_s_min: 140
-board_v_min: 55
+board_h_min: 95
+board_h_max: 135
+board_s_min: 70
+board_v_min: 45
 board_roi_top: 100
 board_roi_left: 64
 board_roi_right: 576
 board_pixel_mode: 1
-board_min_pixels: 6500
+board_min_pixels: 3500
 board_min_area: 1500
 board_min_width: 40
 board_min_height: 25
@@ -91,7 +91,7 @@ board_confirm_seconds: 0.15
 zebra_white_s_max: 75
 zebra_white_v_min: 175
 zebra_min_stripes: 4
-zebra_confirm_frames: 3
+zebra_confirm_frames: 1
 zebra_roi_left: 0.12
 zebra_roi_right: 0.88
 zebra_roi_top: 0.45
@@ -104,20 +104,20 @@ zebra_max_width_ratio: 2.2
 zebra_max_pitch_ratio: 1.8
 zebra_min_gap_ratio: 0.15
 zebra_max_gap_ratio: 2.5
-zebra_stop_y: 0.65
+zebra_stop_y: 0.60
 zebra_hold_seconds: 10.
 zebra_brake_seconds: 0.8
-zebra_brake_pwm: 8000
+zebra_brake_pwm: 7000
 
 # 红绿灯：默认原版颜色识别；--light-night切换现有夜间检测器。
-light_brake_pwm: 8000
+light_brake_pwm: 7000
 light_brake_seconds: 0.8
 light_green_seconds: 0.5
 light_after_zebra_enabled: 1
-light_after_zebra_seconds: 3.0
-light_slow_pwm: 10700
+light_after_zebra_seconds: 6.0
+light_slow_pwm: 10500
 light_slow_settle_seconds: 0.3
-light_detect_interval_ms: 100
+light_detect_interval_ms: 50
 
 # 唯一停车为parking3；蓝板阈值来自board_*，白边来自巡线；其余参数均为本模块实际使用。
 parking_photo_delay_seconds: 1.0
@@ -140,7 +140,7 @@ parking3_steer_limit: 15.0
 parking3_steer_rate: 40.0
 parking3_stop_white_v_min: 230
 parking3_stop_white_s_max: 120
-parking3_stop_min_area: 2500
+parking3_stop_min_area: 2200
 parking3_stop_min_bottom: 200
 parking3_stop_min_fill: 0.65
 parking3_stop_confirm_frames: 3
@@ -158,5 +158,16 @@ parking3_wait_side_pwm: 10500
 parking3_board_full_width: 1 # include boards touching image edges; 0 uses shared board_roi_left/right
 
 # 白矩形确认后的一次制动：同步jgy/race室外配置，结束后保持电机中位。
-parking3_brake_pwm: 9500
+parking3_brake_pwm: 8000
 parking3_brake_seconds: 0.3
+
+# Seconds from entering FOLLOW until panel confirmation; 0 disables timeout.
+parking3_follow_timeout_seconds: 0
+
+# 首次触发红灯制动起计时，含制动；重复红灯或未知不重置。0禁用超时。
+light_red_timeout_seconds: 10.0
+# 仅all：灯阶段放行后沿原巡线前进，满5秒才启用锥桶识别。0立即识别。
+cone_after_light_seconds: 5.0
+
+# 1: brake on first red candidate; 2: original two-hit confirmation. Green unchanged.
+light_red_confirm_frames: 1

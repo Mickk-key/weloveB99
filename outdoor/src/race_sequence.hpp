@@ -6,13 +6,14 @@
 class RaceSequence {
 public:
     enum Stage { INDEPENDENT, WAIT_START_BOARD, WAIT_START_CLEAR,
-                 ZEBRA, LIGHT, CONE, PARKING, FINISHED };
+                 ZEBRA, LIGHT, CONE_CRUISE, CONE, PARKING, FINISHED };
 private:
     Stage stage_;
     BoardConfig cfg;
     BlueBoardStop startBoard; // 与终点停车的 BlueBoardStop 完全独立，不能复用锁存。
     int clearHits_=0;
     double clearSince=-1,lastClear=-1,launchedAt=-1;
+    double coneCruiseElapsed=0,coneCruiseLast=-1;
 public:
     RaceSequence(bool enabled,const BoardConfig& c):
         stage_(enabled?WAIT_START_BOARD:INDEPENDENT),cfg(c),startBoard(c){}
@@ -27,6 +28,7 @@ public:
         case WAIT_START_CLEAR:return "WAIT_START_CLEAR";
         case ZEBRA:return "ZEBRA";
         case LIGHT:return "LIGHT";
+        case CONE_CRUISE:return "CONE_CRUISE";
         case CONE:return "CONE";
         case PARKING:return "PARKING";
         case FINISHED:return "FINISHED";
@@ -59,7 +61,18 @@ public:
     bool coneAllowed()const{return !enabled()||stage_==CONE;}
     bool parkingAllowed()const{return !enabled()||stage_==PARKING||stage_==FINISHED;}
     void finishZebra(bool done){if(stage_==ZEBRA&&done)stage_=LIGHT;}
-    void finishLight(bool done){if(stage_==LIGHT&&done)stage_=CONE;}
+    void finishLight(bool done,double now){
+        if(stage_==LIGHT&&done){stage_=CONE_CRUISE;coneCruiseElapsed=0;coneCruiseLast=now;}
+    }
+    // 只在完整比赛灯阶段放行后累计前进时间；此阶段coneAllowed仍为false。
+    // forward来自上一帧最终电机命令，停车时间不计入；保持原巡线转向。
+    void updateConeCruise(double now,double seconds,bool forward){
+        if(stage_!=CONE_CRUISE)return;
+        const double dt=std::max(0.,now-coneCruiseLast);coneCruiseLast=now;
+        if(forward)coneCruiseElapsed+=dt;
+        if(coneCruiseElapsed+1e-9>=seconds)stage_=CONE;
+    }
+    double coneCruiseRemaining(double seconds)const{return stage_==CONE_CRUISE?std::max(0.,seconds-coneCruiseElapsed):0.;}
     void finishCones(bool done){if(stage_==CONE&&done)stage_=PARKING;}
     void finishParking(bool done){if(stage_==PARKING&&done)stage_=FINISHED;}
     void drawStart(cv::Mat& view)const{

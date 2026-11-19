@@ -20,8 +20,11 @@ struct Parking3Config {
     double stopMinFill=.65,stopSeconds=.2,stopCenterTolerance=.3;
     int stopDimV=90,stopDimS=90,stopDarkV=100;
     double stopDarkFraction=.6;
+    double followTimeout=2.;
     void load(const cv::FileStorage& f){
 #define P2(k,v) if(!f[k].empty())f[k]>>v
+        P2("parking3_follow_timeout_seconds",followTimeout);
+        if(!std::isfinite(followTimeout)||followTimeout<0||followTimeout>60)throw std::runtime_error("Invalid parking3 search timeout");
         P2("parking3_yellow_h_min",hmin);P2("parking3_yellow_h_max",hmax);
         P2("parking3_yellow_s_min",smin);P2("parking3_yellow_v_min",vmin);
         P2("parking3_roi_top",roiTop);P2("parking3_roi_bottom",roiBottom);
@@ -67,6 +70,7 @@ class Parking3 {
     Parking3Config c;
     BlueBoardStop blueGate;
     static BoardConfig gateConfig(BoardConfig b,int full){if(full){b.board_roi_left=0;b.board_roi_right=640;}return b;}
+    double followSince=-1;
     int proposal=0,hits=0,stopHits=0;
     double previousError=0,boardCenter=320.,stopSince=-1,stopLast=-1;
     bool previousValid=false,stopFound=false;
@@ -140,7 +144,15 @@ public:
             if(!side){useLane=true;state="PARK3_SEARCH_LINE";path="SEARCH_WITH_LANE";
                 error=correction=0;previousValid=false;return;}
         }
-        if(detectStopRectangle(hsv,now,canStart)){stopped=true;state="PARK3_PANEL_STOP";path="STOP";error=correction=0;return;}
+
+        if(canStart){
+            if(followSince<0)followSince=now;
+            bool panel=detectStopRectangle(hsv,now,true);
+            if(panel||(c.followTimeout>0&&now-followSince>=c.followTimeout)){
+                stopped=true;state="PARK3_PANEL_STOP";path=panel?"STOP":"FOLLOW_TIMEOUT";
+                error=correction=0;return;
+            }
+        }
         useLane=false;error=correction=0;
         const int nearY=410,farY=230;
         // Reuse the exact geometry already produced by the active lane backend.
