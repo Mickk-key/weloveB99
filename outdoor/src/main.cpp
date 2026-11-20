@@ -4,12 +4,13 @@
 #include "suite.hpp"
 #include "camera_controls.hpp"
 #include <memory>
+#include <unistd.h>
 #include "parking_photo.hpp"
 
 // 将一帧的状态、PWM、巡线误差及各模块结果组织成 JSONL。
 // 同一份消息用于终端、退出时的日志；PWM 是控制量，不是实际车速。
 std::string json(const Command& c,double t,bool motion){
-    std::ostringstream s;s<<"{\"t\":"<<t<<",\"state\":\""<<c.state<<"\",\"motor_pwm\":"<<c.motor<<",\"motion_enabled\":"<<(motion?1:0)<<",\"servo_pwm\":"<<c.steer<<",\"target_pwm\":"<<c.target<<",\"error\":"<<c.error<<",\"lane_error\":"<<c.baseError<<",\"left\":"<<c.left<<",\"right\":"<<c.right<<",\"cone\":\""<<c.cone<<"\",\"offset\":"<<c.offset<<",\"passed\":"<<c.passed<<",\"cone_target_id\":"<<c.coneTarget<<",\"cone_next_id\":"<<c.coneNext<<",\"cone_tracks\":"<<c.coneTracks<<",\"cone_side\":"<<c.coneSide<<",\"cone_handoff\":"<<c.coneHandoff<<",\"light\":"<<c.light.observation.state<<",\"light_mode\":\""<<c.light.mode<<"\",\"light_phase\":\""<<c.light.phase<<"\",\"light_confirmed\":"<<c.light.observation.confirmed<<",\"light_evidence\":\""<<c.light.observation.evidence<<"\",\"light_sequence\":\""<<c.light.sequence<<"\",\"light_sequence_remaining_s\":"<<c.light.sequenceRemaining<<",\"light_red_wait_remaining_s\":"<<c.light.redWaitRemaining<<",\"light_release_reason\":\""<<c.light.releaseReason<<"\""<<",\"light_detection_ran\":"<<c.light.detectionRan<<",\"light_detection_calls\":"<<c.light.detectionCalls<<",\"red_pixels\":"<<c.light.observation.red<<",\"green_pixels\":"<<c.light.observation.green<<",\"zebra\":\""<<c.zebra<<"\",\"zebra_y\":"<<c.zebraY<<",\"parking\":\""<<c.parking<<"\",\"parking_armed\":"<<c.parkingArmed<<",\"frame_dt_s\":"<<c.frameDt<<",\"processing_ms\":"<<c.processingMs<<",\"parking_side\":"<<c.parkingSide<<",\"parking_panel_checked\":"<<c.panelChecked<<",\"parking_panel_found\":"<<c.panelFound<<",\"parking_panel_hits\":"<<c.panelHits<<",\"parking_side_name\":\""<<(c.parkingSide>0?"RIGHT":c.parkingSide<0?"LEFT":"UNSELECTED")<<"\",\"parking_path\":\""<<c.parkingPath<<"\""<<",\"cone_cruise_remaining_s\":"<<c.coneCruiseRemaining<<",\"race_stage\":\""<<c.raceStage<<"\",\"start_board_confirmed\":"<<c.startBoardConfirmed<<",\"start_clear_hits\":"<<c.startClearHits<<"}\n";return s.str();
+    std::ostringstream s;s<<"{\"t\":"<<t<<",\"state\":\""<<c.state<<"\",\"motor_pwm\":"<<c.motor<<",\"motion_enabled\":"<<(motion?1:0)<<",\"servo_pwm\":"<<c.steer<<",\"target_pwm\":"<<c.target<<",\"error\":"<<c.error<<",\"lane_error\":"<<c.baseError<<",\"left\":"<<c.left<<",\"right\":"<<c.right<<",\"cone\":\""<<c.cone<<"\",\"offset\":"<<c.offset<<",\"passed\":"<<c.passed<<",\"cone_target_id\":"<<c.coneTarget<<",\"cone_next_id\":"<<c.coneNext<<",\"cone_tracks\":"<<c.coneTracks<<",\"cone_side\":"<<c.coneSide<<",\"cone_handoff\":"<<c.coneHandoff<<",\"light\":"<<c.light.observation.state<<",\"light_mode\":\""<<c.light.mode<<"\",\"light_phase\":\""<<c.light.phase<<"\",\"light_confirmed\":"<<c.light.observation.confirmed<<",\"light_evidence\":\""<<c.light.observation.evidence<<"\",\"light_sequence\":\""<<c.light.sequence<<"\",\"light_sequence_remaining_s\":"<<c.light.sequenceRemaining<<",\"light_red_wait_remaining_s\":"<<c.light.redWaitRemaining<<",\"light_release_reason\":\""<<c.light.releaseReason<<"\""<<",\"light_detection_ran\":"<<c.light.detectionRan<<",\"light_detection_calls\":"<<c.light.detectionCalls<<",\"red_pixels\":"<<c.light.observation.red<<",\"green_pixels\":"<<c.light.observation.green<<",\"zebra\":\""<<c.zebra<<"\",\"zebra_y\":"<<c.zebraY<<",\"parking\":\""<<c.parking<<"\",\"parking_armed\":"<<c.parkingArmed<<",\"frame_dt_s\":"<<c.frameDt<<",\"processing_ms\":"<<c.processingMs<<",\"parking_side\":"<<c.parkingSide<<",\"parking_panel_checked\":"<<c.panelChecked<<",\"parking_panel_found\":"<<c.panelFound<<",\"parking_panel_hits\":"<<c.panelHits<<",\"parking_side_name\":\""<<(c.parkingSide>0?"RIGHT":c.parkingSide<0?"LEFT":"UNSELECTED")<<"\",\"parking_path\":\""<<c.parkingPath<<"\""<<",\"cone_cruise_remaining_s\":"<<c.coneCruiseRemaining<<",\"parking_cruise_remaining_s\":"<<c.parkingCruiseRemaining<<",\"race_stage\":\""<<c.raceStage<<"\",\"start_board_confirmed\":"<<c.startBoardConfirmed<<",\"start_clear_hits\":"<<c.startClearHits<<"}\n";return s.str();
 }
 int main(int argc,char** argv){try{
     std::string env=LaneBackend::name(),config,mod="lane",image,video,out="runs/latest",exposure,device;
@@ -22,9 +23,9 @@ int main(int argc,char** argv){try{
         else if(a=="--light-night")lightNight=true;
         else if(a=="--check-hardware")checkHardware=true;else if(a=="--check-config")check=true;else if(a=="--camera-only")rawOnly=show=true;else if(a=="--camera-info")info=true;
         else if(a=="--help"){
-            std::cout<<"Race (environment fixed by this folder): --modules lane,light,cone,zebra,parking3 (all = lane,zebra,light,cone,parking3)\n"
-                     <<"Full module sets wait for a confirmed blue board to be removed, then run zebra -> light -> cone -> parking.\n"
-                     <<"--light-night (V2 color/bright-core recognition; default: supplied traffic-light detector)\n"
+            std::cout<<"Race (environment fixed by this folder): --modules lane,light,cone,zebra,parking3,parking4 (all = lane,zebra,light,cone,parking4)\n"
+                     <<"Full course: zebra -> timed lane/stop -> lane cone_after_light_seconds -> cone -> lane parking_after_cones_seconds -> parking4; no light detection.\n"
+                     <<"--light-night (night detector for visual light mode; ignored by all's default fixed timer)\n"
                      <<"--show --masks --enable-motion \n"
                      <<"--camera-only (raw window, NO GPIO) --camera-info --exposure auto|manual --exposure-value N --device PATH\n"
                      <<"--config YAML --check-config --check-hardware --image FILE --replay VIDEO --frames N --out RELATIVE_PREFIX\n--run-seconds N (optional wall-clock limit; neutral is sent even if camera processing stalls)\n";return 0;
@@ -43,13 +44,19 @@ int main(int argc,char** argv){try{
     // --config 指定了文件时，不再自动使用 config/<env>.yaml。
     if(config.empty())config="config/"+env+".yaml";
     SuiteConfig c;c.load(config);
-    c.lightNight=lightNight;if(lightNight)TrafficRecognizer::checkNightConfig();
+    Modules modules(mod);
+    const bool fixedLight=modules.fullCourse()&&c.fixedLight.enabled;
+    c.lightNight=lightNight&&!fixedLight;if(c.lightNight)TrafficRecognizer::checkNightConfig();
     if(!device.empty())c.drive.camera_device=device;
     if(exposureValue>0)c.drive.set_exposure=exposureValue;
     if(!exposure.empty())c.drive.set_auto_exposure=exposure=="manual"?1:3;
-    Modules modules(mod);
-    std::cout<<"CONFIG version=race env="<<env<<" lane="<<c.backend<<" modules="<<modules.str()<<" parking_mode="<<"parking3"<<" cone_mode="<<"visual_shape"<<" watchdog="<<(c.drive.control_watchdog_enabled?"ON":"OFF")<<" file="<<config<<" race_sequence="<<(modules.fullCourse()?"ordered_wait_board":"independent");
-    if(modules.light)std::cout<<" light_mode="<<(lightNight?"night_v2":"signal_color");
+    std::cout<<"CONFIG version=race env="<<env<<" lane="<<c.backend<<" modules="<<modules.str()<<" parking_mode="<<(modules.parking4?"parking4":modules.parking3?"parking3":"disabled")<<" cone_mode="<<"visual_shape"<<" watchdog="<<(c.drive.control_watchdog_enabled?"ON":"OFF")<<" file="<<config<<" race_sequence="<<(modules.fullCourse()?"ordered_wait_board":"independent");
+    if(modules.light)std::cout<<" light_mode="<<(fixedLight?"fixed_timed":c.lightNight?"night_v2":"signal_color");
+    if(fixedLight)std::cout<<" light_detection=OFF cruise_seconds="<<c.fixedLight.cruiseSeconds
+        <<" cruise_pwm="<<c.fixedLight.cruisePwm<<" cruise_steering=lane"
+        <<" brake_pwm="<<c.light.brakePwm<<" brake_seconds="<<c.light.brakeSeconds
+        <<" stop_seconds="<<c.fixedLight.stopSeconds<<" cone_delay_seconds="<<c.coneAfterLightSeconds;
+    if(modules.fullCourse())std::cout<<" parking_delay_seconds="<<c.parkingAfterConesSeconds;
     std::cout<<std::endl;
     // 配置检查在打开相机、创建 Output 之前返回，只读取和校验参数。
     if(check)return 0;
@@ -91,7 +98,7 @@ int main(int argc,char** argv){try{
     // 输入初始化成功后才创建硬件输出对象；未指定 --enable-motion 时不发送 GPIO。
     // Suite 保存跨帧识别和任务状态，records 只保留最近 4096 条状态记录。
     // Output后构造先析构：异常退出也先停止输出，再结束其余对象。
-    Suite suite(c,modules);Output output(c.drive,motion,false,runSeconds);auto start=Clock::now();int n=0;Command command;std::deque<std::string> records;std::string previousState;
+    Suite suite(c,modules);Output output(c.drive,motion,false,runSeconds);auto start=Clock::now();int n=0;Command command;std::deque<std::string> records;std::string previousState,previousZebra;bool zebraVoicePlayed=false;
     ParkingPhoto parkingPhoto(c.parkingPhotoDelay);
     const std::string parkingPhotoPath=out+"_parked_"+std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count())+"_"+std::to_string(getpid())+".jpg";
     // 主循环顺序：取帧 → 算法与任务仲裁 → 输出命令 → 诊断显示。
@@ -111,6 +118,14 @@ int main(int argc,char** argv){try{
                 if(parkingPhoto.update(frame,now,command.state,command.motor,c.drive.neutral_pwm,parkingPhotoPath))
                     std::cout<<"[PARK_PHOTO] saved="<<parkingPhotoPath<<" motion_enabled="<<motion<<std::endl;
             }catch(const std::exception& e){std::cerr<<"[PARK_PHOTO_ERROR] "<<e.what()<<std::endl;}
+            if(modules.zebra&&!zebraVoicePlayed&&previousZebra!="HOLD"&&command.zebra=="HOLD"){
+                zebraVoicePlayed=true;
+                if(motion){pid_t child=fork();
+                    if(child==0){execl("/usr/bin/aplay","aplay","-q","-D","plughw:1,0","audio/parking_announcement.wav",(char*)nullptr);_exit(127);}
+                    std::cout<<"[ZEBRA_AUDIO] hold_started child="<<child<<std::endl;
+                }else std::cout<<"[ZEBRA_AUDIO] hold_started preview_only"<<std::endl;
+            }
+            previousZebra=command.zebra;
             auto message=json(command,now,motion);if(records.size()>=4096)records.pop_front();records.push_back(message);if(n%10==0||command.state!=previousState)console.publish(message);previousState=command.state;
         }
         // 显示原图、识别叠加图及可选巡线掩码；Esc/q 结束。

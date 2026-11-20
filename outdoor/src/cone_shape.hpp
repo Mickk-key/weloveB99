@@ -47,7 +47,7 @@ public:
         int top=std::max(0,c.cone_roi_top-100);
         cv::Rect roi(0,top,frame.cols,frame.rows-top);cv::Mat crop=frame(roi),gray;
         cv::cvtColor(crop,gray,cv::COLOR_BGR2GRAY);
-        std::vector<cv::Mat> channels;cv::split(crop,channels);channels.push_back(gray);
+        std::vector<cv::Mat> channels;cv::split(crop,channels);channels.push_back(gray);if(c.cone_shape_channels==2)channels={channels[0],gray};
         auto contrast=cv::createCLAHE(2.,{8,8});cv::Mat edges=cv::Mat::zeros(crop.size(),CV_8UC1);
         std::vector<cv::Rect> proposals;
         for(const auto& channel:channels){
@@ -85,6 +85,22 @@ public:
                 }
                 r.y+=top;proposals.push_back(r);
             }
+        }
+        // Colour-supported proposal: retain taper geometry without fragile Canny closure.
+        if(c.cone_blue_enabled){
+            cv::Mat hsv,blue;cv::cvtColor(crop,hsv,cv::COLOR_BGR2HSV);
+            cv::inRange(hsv,cv::Scalar(c.cone_blue_h_min,c.cone_blue_s_min,c.cone_blue_v_min),cv::Scalar(c.cone_blue_h_max,255,255),blue);
+            cv::morphologyEx(blue,blue,cv::MORPH_CLOSE,cv::getStructuringElement(cv::MORPH_RECT,{3,3}));
+            std::vector<std::vector<cv::Point>> contours;cv::findContours(blue,contours,cv::RETR_EXTERNAL,cv::CHAIN_APPROX_SIMPLE);
+            for(const auto& pts:contours){
+                cv::Rect r=cv::boundingRect(pts);double ratio=double(r.height)/std::max(1,r.width),fill=cv::contourArea(pts)/std::max(1,r.area());
+                if(r.width<c.cone_shape_min_width||r.height<c.cone_shape_min_height||r.width>c.cone_max_width||ratio<c.cone_shape_aspect_min||ratio>3.5||fill<.3||fill>.9||r.br().y+top<c.cone_roi_top+c.cone_min_height)continue;
+                cv::Mat silhouette=blue(r);double tc,mc,bc;
+                double tw=bandWidth(silhouette,.12,.27,tc),mw=bandWidth(silhouette,.42,.58,mc),bw=bandWidth(silhouette,.73,.90,bc);
+                if(bw<5||tw/bw>c.cone_shape_top_ratio||mw<tw*.95||bw<mw*1.10||std::abs(tc-bc)>r.width*.28||std::abs(mc-bc)>r.width*.22)continue;
+                r.y+=top;proposals.push_back(r);
+            }
+            edges|=blue;
         }
         mask=cv::Mat::zeros(frame.size(),CV_8UC1);edges.copyTo(mask(roi));
         // Inner/outer edge loops and painted bands are one physical proposal.

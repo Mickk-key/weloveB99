@@ -1,17 +1,19 @@
-#!/bin/bash
+#!/bin/sh
 set -eu
 cd "$(dirname "$0")"
-# 兼容旧命令；独立目录请直接使用 indoor/run.sh 或 outdoor/run.sh。
 environment=
-args=()
-for arg in "$@"; do
+remaining=$#
+while [ "$remaining" -gt 0 ]; do
+  arg=$1; shift; remaining=$((remaining - 1))
   case "$arg" in
     --env-indoor|--env-outdoor)
-      next=${arg#--env-}
-      if [ -n "$environment" ] && [ "$environment" != "$next" ]; then echo 'Choose one environment' >&2; exit 2; fi
-      environment=$next ;;
-    *) args+=("$arg") ;;
+      selected=${arg#--env-}
+      if [ -n "$environment" ] && [ "$environment" != "$selected" ]; then
+        echo 'Choose one environment' >&2; exit 2
+      fi
+      environment=$selected ;;
+    *) set -- "$@" "$arg" ;;
   esac
 done
-[ -n "$environment" ] || { echo 'Use: bash indoor/run.sh ... or bash outdoor/run.sh ... (legacy: --env-indoor/--env-outdoor)' >&2; exit 2; }
-exec bash "$environment/run.sh" "${args[@]}"
+[ -n "$environment" ] || { echo 'Specify --env-indoor or --env-outdoor, or use indoor/run.sh / outdoor/run.sh' >&2; exit 2; }
+exec bash "$environment/run.sh" "$@"

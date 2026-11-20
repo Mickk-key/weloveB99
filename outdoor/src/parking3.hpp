@@ -1,6 +1,9 @@
 #pragma once
 #include "blue_board.hpp"
+#include "parking4.hpp"
+#include "parking4_yellow_stop.hpp"
 #include "lane_geometry.hpp"
+#include "parking_panel.hpp"
 #include <opencv2/opencv.hpp>
 #include <algorithm>
 #include <cmath>
@@ -8,23 +11,41 @@
 #include <string>
 #include <vector>
 
-// 当前唯一停车实现：蓝板/黄横线选侧 → 所选侧白边 → 白矩形锁停。坐标640×480。
-// 蓝板使用board_*；白边直接使用巡线几何。这里只加载实际使用的黄线/跟边/白矩形参数。
+// 独立于原 parking 的黄横线停车路径。图像坐标均以 640x480 为准。
 struct Parking3Config {
+    Parking4YellowConfig yellowStop;
+    bool yellowOnly=false; int allYellowOnly=1; bool laneSide=false; int laneSideFrames=2; double laneSideGap=25,laneSideHold=.3;
     int hmin=18,hmax=40,smin=60,vmin=100,roiTop=180,roiBottom=470;
     int minLength=65,houghVotes=25,maxGap=18,sideFrames=2,sideGap=25;
     double maxSlope=.25,kp=.4,kd=.5,steerLimit=15.,steerRate=40.;
     int forwardPwm=10600,waitPwm=10500,boardFullWidth=1;
     double distanceNear=100,distanceFar=40,errorBias=0,holdSeconds=.3;
+    int blueHMin=100,blueHMax=130,blueSMin=60,blueVMin=55;
+    int blueMinPixels=2500,blueMinHeight=100,blueConfirmFrames=2;
+    int blueLeaveFrames=2;
+    int whiteSMax=70,whiteVMin=150,whiteMinLength=65,whiteMinGap=25;
+    double whiteMaxSlope=1.6;
+    int laneYellowHMin=10,laneYellowHMax=34,laneYellowSMin=35,laneYellowVMin=125;
+    int laneYellowMinLength=65,laneMinGap=60,laneMaxGap=550;
+    double laneYellowMaxSlope=1.6;
     int stopWhiteV=230,stopWhiteS=120,stopMinArea=2500,stopMinBottom=200,stopFrames=3;
     double stopMinFill=.65,stopSeconds=.2,stopCenterTolerance=.3;
     int stopDimV=90,stopDimS=90,stopDarkV=100;
     double stopDarkFraction=.6;
-    double followTimeout=2.;
+    double followTimeout=2.,yellowFollowSeconds=0.;
+    ParkingPanel panel;
     void load(const cv::FileStorage& f){
+        yellowStop.load(f);
+        if(!f["parking4_yellow_follow_seconds"].empty())f["parking4_yellow_follow_seconds"]>>yellowFollowSeconds;
+        if(!std::isfinite(yellowFollowSeconds)||yellowFollowSeconds<0||yellowFollowSeconds>10)throw std::runtime_error("parking4_yellow_follow_seconds must be 0..10");
+        if(!f["parking4_all_yellow_only"].empty())f["parking4_all_yellow_only"]>>allYellowOnly;
+        if(allYellowOnly!=0&&allYellowOnly!=1)throw std::runtime_error("parking4_all_yellow_only must be 0 or 1");
+        panel.load(f); // 白板使用现有停车白板检测器及 parking_panel_* 标定。
 #define P2(k,v) if(!f[k].empty())f[k]>>v
+        P2("parking4_side_frames",laneSideFrames);P2("parking4_side_gap_px",laneSideGap);P2("parking4_lane_hold_seconds",laneSideHold);
+        if(laneSideFrames<1||laneSideFrames>30||!std::isfinite(laneSideGap)||laneSideGap<0||laneSideGap>640||!std::isfinite(laneSideHold)||laneSideHold<0||laneSideHold>1)throw std::runtime_error("Invalid parking4 side config");
         P2("parking3_follow_timeout_seconds",followTimeout);
-        if(!std::isfinite(followTimeout)||followTimeout<0||followTimeout>60)throw std::runtime_error("Invalid parking3 search timeout");
+        if(!std::isfinite(followTimeout)||followTimeout<0||followTimeout>60)throw std::runtime_error("Invalid parking3 follow timeout");
         P2("parking3_yellow_h_min",hmin);P2("parking3_yellow_h_max",hmax);
         P2("parking3_yellow_s_min",smin);P2("parking3_yellow_v_min",vmin);
         P2("parking3_roi_top",roiTop);P2("parking3_roi_bottom",roiBottom);
@@ -33,6 +54,19 @@ struct Parking3Config {
         P2("parking3_side_frames",sideFrames);P2("parking3_side_gap_px",sideGap);
         P2("parking3_follow_pwm",forwardPwm);P2("parking3_kp",kp);P2("parking3_kd",kd);
         P2("parking3_steer_limit",steerLimit);P2("parking3_steer_rate",steerRate);
+        P2("parking3_blue_h_min",blueHMin);P2("parking3_blue_h_max",blueHMax);
+        P2("parking3_blue_s_min",blueSMin);P2("parking3_blue_v_min",blueVMin);
+        P2("parking3_blue_min_pixels",blueMinPixels);P2("parking3_blue_min_height",blueMinHeight);
+        P2("parking3_blue_confirm_frames",blueConfirmFrames);
+        P2("parking3_blue_leave_frames",blueLeaveFrames);
+        P2("parking3_white_s_max",whiteSMax);P2("parking3_white_v_min",whiteVMin);
+        P2("parking3_white_min_length",whiteMinLength);P2("parking3_white_min_gap",whiteMinGap);
+        P2("parking3_white_max_slope",whiteMaxSlope);
+        P2("parking3_lane_yellow_h_min",laneYellowHMin);P2("parking3_lane_yellow_h_max",laneYellowHMax);
+        P2("parking3_lane_yellow_s_min",laneYellowSMin);P2("parking3_lane_yellow_v_min",laneYellowVMin);
+        P2("parking3_lane_yellow_min_length",laneYellowMinLength);
+        P2("parking3_lane_yellow_max_slope",laneYellowMaxSlope);
+        P2("parking3_lane_min_gap",laneMinGap);P2("parking3_lane_max_gap",laneMaxGap);
         P2("parking3_stop_white_v_min",stopWhiteV);P2("parking3_stop_white_s_max",stopWhiteS);
         P2("parking3_stop_min_area",stopMinArea);P2("parking3_stop_min_bottom",stopMinBottom);
         P2("parking3_stop_min_fill",stopMinFill);P2("parking3_stop_confirm_frames",stopFrames);
@@ -53,7 +87,18 @@ struct Parking3Config {
            forwardPwm<=10000||forwardPwm>12000||!std::isfinite(kp)||kp<0||kp>2||
            !std::isfinite(kd)||kd<0||kd>2||!std::isfinite(steerLimit)||steerLimit<=0||steerLimit>15||
            !std::isfinite(steerRate)||steerRate<=0||steerRate>100||
-           stopWhiteV<1||stopWhiteV>255||
+           blueHMin<0||blueHMax>179||blueHMin>blueHMax||blueSMin<0||blueSMin>255||
+           blueVMin<0||blueVMin>255||blueMinPixels<100||blueMinHeight<20||
+           blueConfirmFrames<1||blueConfirmFrames>30||blueLeaveFrames<1||blueLeaveFrames>30||
+           whiteSMax<0||whiteSMax>255||
+           whiteVMin<0||whiteVMin>255||whiteMinLength<20||whiteMinLength>400||
+           whiteMinGap<10||whiteMinGap>200||!std::isfinite(whiteMaxSlope)||
+           whiteMaxSlope<0||whiteMaxSlope>3||laneYellowHMin<0||laneYellowHMax>179||
+           laneYellowHMin>laneYellowHMax||laneYellowSMin<0||laneYellowSMin>255||
+           laneYellowVMin<0||laneYellowVMin>255||laneYellowMinLength<20||
+           laneYellowMinLength>400||!std::isfinite(laneYellowMaxSlope)||
+           laneYellowMaxSlope<0||laneYellowMaxSlope>3||laneMinGap<20||
+           laneMaxGap>640||laneMaxGap<=laneMinGap||stopWhiteV<1||stopWhiteV>255||
            stopWhiteS<0||stopWhiteS>255||stopMinArea<500||stopMinArea>50000||
            stopMinBottom<100||stopMinBottom>479||!std::isfinite(stopMinFill)||
            stopMinFill<.3||stopMinFill>.95||stopFrames<2||stopFrames>30||
@@ -67,37 +112,40 @@ struct Parking3Config {
 };
 
 class Parking3 {
+    Parking4Selector laneSelector;
+    Parking4YellowStop yellowStop;
     Parking3Config c;
     BlueBoardStop blueGate;
     static BoardConfig gateConfig(BoardConfig b,int full){if(full){b.board_roi_left=0;b.board_roi_right=640;}return b;}
-    double followSince=-1;
-    int proposal=0,hits=0,stopHits=0;
+    double followSince=-1,yellowConfirmedAt=-1;
+    int proposal=0,hits=0,blueHits=0,blueMissing=0,stopHits=0;
     double previousError=0,boardCenter=320.,stopSince=-1,stopLast=-1;
-    bool previousValid=false,stopFound=false;
+    bool previousValid=false,leftBluePhase=false,stopFound=false;
     cv::Rect stopBox,stopPrevious;
     double whiteSeen=-1,targetNear=320,targetFar=320;
     bool detectStopRectangle(const cv::Mat& hsv,double now,bool enabled){
         stopFound=false;stopBox={};double best=0;
         cv::Mat value,dark;cv::extractChannel(hsv,value,2);
         cv::threshold(value,dark,c.stopDarkV,255,cv::THRESH_BINARY_INV);
-        for(int mode=0;mode<2;++mode){
+        for(int mode=0;mode<13;++mode){
             cv::Mat white;cv::inRange(hsv,
-                cv::Scalar(0,0,mode?c.stopDimV:c.stopWhiteV),
-                cv::Scalar(179,mode?c.stopDimS:c.stopWhiteS,255),white);
+                cv::Scalar(0,0,mode?std::min(230,c.stopDimV+((mode-1)/3)*40):c.stopWhiteV),
+                cv::Scalar(179,mode?std::max(0,c.stopDimS-((mode-1)%3)*20):c.stopWhiteS,255),white);
             white.rowRange(0,100).setTo(0);
             std::vector<std::vector<cv::Point>> contours;
             cv::findContours(white,contours,cv::RETR_EXTERNAL,cv::CHAIN_APPROX_SIMPLE);
             for(const auto& q:contours){auto r=cv::boundingRect(q);double area=cv::contourArea(q);
-                // 沿用jgy/race最新逻辑：近处白板允许超过旧250×300上限，其余门槛保留。
-                if(r.width<35||r.height<40||
+                if(r.x<=0||r.y<=100||r.br().x>=hsv.cols||r.width<25||r.height<30||
                    r.br().y<c.stopMinBottom||r.area()<c.stopMinArea||
-                   area/r.area()<c.stopMinFill||double(r.width)/r.height<.35||
+                   area/r.area()<c.stopMinFill||double(r.width)/r.height<.6||
                    double(r.width)/r.height>1.8||
                    std::abs(r.x+r.width*.5-hsv.cols*.5)>hsv.cols*c.stopCenterTolerance)continue;
-                if(mode){cv::Rect outer(r.x-10,r.y-10,r.width+20,r.height+20);
+                {cv::Rect outer(r.x-10,r.y-10,r.width+20,r.height+20);
                     outer&=cv::Rect(0,0,hsv.cols,hsv.rows);
                     int ring=outer.area()-r.area();
-                    if(ring<=0||double(cv::countNonZero(dark(outer))-cv::countNonZero(dark(r)))/ring<c.stopDarkFraction)continue;}
+                    cv::Mat ringMask;cv::threshold(value(outer),ringMask,std::min(std::min(double(c.stopDarkV),cv::mean(value(r))[0]>=230?220.:180.),cv::mean(value(r))[0]-25),255,cv::THRESH_BINARY_INV);
+                    ringMask(cv::Rect(r.x-outer.x,r.y-outer.y,r.width,r.height)).setTo(0);
+                    if(ring<=0||double(cv::countNonZero(ringMask))/ring<std::max(c.stopDarkFraction,cv::mean(value(r))[0]>=230?.4:.5))continue;}
                 if(area>best){best=area;stopFound=true;stopBox=r;}
             }
         }
@@ -109,22 +157,26 @@ class Parking3 {
     }
 public:
     int side=0;bool line=false,stopped=false,useLane=false;double midX=320,error=0,correction=0;
-    double whiteNear=0,whiteFar=0,whiteA=0,whiteB=0;
+    double blueEdge=0,whiteNear=0,whiteFar=0,whiteA=0,whiteB=0;
+    double yellowNear=0,yellowFar=0,yellowA=0,yellowB=0;
     cv::Vec4i segment{0,0,0,0};cv::Mat mask;
     std::string state="PARK3_WAIT_BOARD",path="NONE";
     explicit Parking3(Parking3Config cfg={},BoardConfig boardCfg={}):c(cfg),blueGate(gateConfig(boardCfg,cfg.boardFullWidth)){}
+    void beginYellowWhite(int selectedSide){side=selectedSide;leftBluePhase=true;}
     double rate()const{return c.steerRate;}
     int motor()const{return side?c.forwardPwm:c.waitPwm;}
     bool engaged()const{return side!=0||state=="PARK3_SEARCH_LINE"||stopped;}
     bool panelFound()const{return stopFound;}
+    bool finalFollowing()const{return yellowConfirmedAt>=0&&!stopped;}
     int panelHits()const{return stopHits;}
-    void update(const cv::Mat& frame,double now,bool canStart,const LaneV2& lane){
+    void update(const cv::Mat& frame,const BlueBoardStop& board,double now,bool canStart,const LaneV2& lane){
         if(stopped){state="PARK3_PANEL_STOP";path="STOP";return;}
         cv::Mat hsv;cv::cvtColor(frame,hsv,cv::COLOR_BGR2HSV);
         // Shared board_* thresholds; full-width observation changes ROI only, never area/time gates.
         blueGate.update(frame,now);
         const bool blueConfirmed=blueGate.stopped;
         if(blueGate.candidate)boardCenter=blueGate.box.x+blueGate.box.width*.5;
+        if(!c.laneSide){
         cv::inRange(hsv,cv::Scalar(c.hmin,c.smin,c.vmin),cv::Scalar(c.hmax,255,255),mask);
         mask.rowRange(0,c.roiTop).setTo(0);mask.rowRange(c.roiBottom,frame.rows).setTo(0);
         cv::morphologyEx(mask,mask,cv::MORPH_OPEN,cv::getStructuringElement(cv::MORPH_RECT,{5,3}));
@@ -136,20 +188,26 @@ public:
             if(side && (side>0?x<boardCenter+c.sideGap:x>boardCenter-c.sideGap))continue;
             if(len>best){best=len;segment=s;midX=x;line=true;}
         }
+        }
         if(!side&&!blueConfirmed){state="PARK3_WAIT_BOARD";path="NONE";return;}
         if(!side){
+            if(c.laneSide)side=laneSelector.choose(lane,blueGate.box,blueGate.candidate,now,c.laneSideFrames,c.laneSideGap,c.laneSideHold);
+            else {
             int candidate=(line&&blueGate.candidate)?(midX>boardCenter+c.sideGap?1:midX<boardCenter-c.sideGap?-1:0):0;
             if(candidate && candidate==proposal)++hits;else{proposal=candidate;hits=candidate?1:0;}
             if(hits>=c.sideFrames)side=candidate;
+            }
             if(!side){useLane=true;state="PARK3_SEARCH_LINE";path="SEARCH_WITH_LANE";
                 error=correction=0;previousValid=false;return;}
         }
-
         if(canStart){
             if(followSince<0)followSince=now;
-            bool panel=detectStopRectangle(hsv,now,true);
-            if(panel||(c.followTimeout>0&&now-followSince>=c.followTimeout)){
-                stopped=true;state="PARK3_PANEL_STOP";path=panel?"STOP":"FOLLOW_TIMEOUT";
+            bool panel=!c.yellowOnly&&detectStopRectangle(hsv,now,true);
+            bool yellow=c.laneSide&&yellowStop.update(hsv,now,c.yellowStop);
+            if(yellow&&yellowConfirmedAt<0)yellowConfirmedAt=now;
+            bool yellowDue=yellowConfirmedAt>=0&&now-yellowConfirmedAt+1e-9>=c.yellowFollowSeconds;
+            if(panel||yellowDue||(!c.yellowOnly&&c.followTimeout>0&&now-followSince>=c.followTimeout)){
+                stopped=true;state="PARK3_PANEL_STOP";path=panel?"STOP":yellowDue?"YELLOW_T_STOP":"FOLLOW_TIMEOUT";
                 error=correction=0;return;
             }
         }
@@ -172,10 +230,10 @@ public:
         targetFar=whiteFar-side*c.distanceFar+8*c.errorBias;
         error=(.75*targetNear+.25*targetFar-frame.cols*.5)/8.;
         correction=std::max(-c.steerLimit,std::min(c.steerLimit,c.kp*error+(previousValid?c.kd*(error-previousError):0.)));
-        previousError=error;previousValid=true;state="PARK3_FOLLOW_WHITE";
+        previousError=error;previousValid=true;state=finalFollowing()?"PARK4_FINAL_FOLLOW":"PARK3_FOLLOW_WHITE";
     }
     void draw(cv::Mat& view)const{
-        if(side&&state=="PARK3_FOLLOW_WHITE"){
+        if(side&&(state=="PARK3_FOLLOW_WHITE"||state=="PARK4_FINAL_FOLLOW")){
             cv::line(view,{int(whiteFar),230},{int(whiteNear),410},path=="WHITE_MEASURED"?cv::Scalar(255,255,255):cv::Scalar(0,180,255),2);
             for(int y=230;y<=410;y+=8){double t=(y-230)/180.;cv::circle(view,{int(targetFar+(targetNear-targetFar)*t),y},3,{255,0,255},-1);}}
         if(stopFound)cv::rectangle(view,stopBox,{0,0,255},2);

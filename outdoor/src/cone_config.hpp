@@ -6,6 +6,14 @@
 // 像素坐标为640×480，fraction是图像宽度比例；保留原默认值及有效范围。
 struct ConeConfig {
     int cone_lane_count=2;
+    int cone_blue_enabled=1;
+    int cone_blue_h_min=90;
+    int cone_blue_h_max=135;
+    int cone_blue_s_min=45;
+    int cone_blue_v_min=55;
+    int cone_shape_channels=4;
+    int cone_search_pwm=10700;
+
     int cone_shape_min_height=18,cone_shape_min_width=8;
     double cone_shape_top_ratio=.65,cone_shape_aspect_min=1.05;
     double cone_handoff_y=420.;
@@ -24,6 +32,14 @@ struct ConeConfig {
             if(!fs[name].empty()&&int(fs[name])!=1)throw std::invalid_argument("Only visual shape cone mode is supported");
 #define CONE_READ(k) if(!fs[#k].empty())fs[#k]>>k
         CONE_READ(cone_lane_count);
+        CONE_READ(cone_blue_enabled);
+        CONE_READ(cone_blue_h_min);
+        CONE_READ(cone_blue_h_max);
+        CONE_READ(cone_blue_s_min);
+        CONE_READ(cone_blue_v_min);
+        CONE_READ(cone_shape_channels);
+        CONE_READ(cone_search_pwm);
+
         CONE_READ(cone_shape_min_height);
         CONE_READ(cone_shape_min_width);
         CONE_READ(cone_shape_top_ratio);
@@ -52,6 +68,7 @@ struct ConeConfig {
         validate();
     }
     void validate()const{
+        if((cone_blue_enabled!=0&&cone_blue_enabled!=1)||cone_blue_h_min<0||cone_blue_h_max>179||cone_blue_h_min>cone_blue_h_max||cone_blue_s_min<0||cone_blue_s_min>255||cone_blue_v_min<0||cone_blue_v_min>255||(cone_shape_channels!=2&&cone_shape_channels!=4)||cone_search_pwm<10000||cone_search_pwm>12000)throw std::invalid_argument("Invalid cone blue/channels/search PWM config");
         if(cone_shape_min_height<8||cone_shape_min_height>100||cone_shape_min_width<4||cone_shape_min_width>100||
            !std::isfinite(cone_shape_top_ratio)||cone_shape_top_ratio<.3||cone_shape_top_ratio>.8||
            !std::isfinite(cone_shape_aspect_min)||cone_shape_aspect_min<.65||cone_shape_aspect_min>2.)

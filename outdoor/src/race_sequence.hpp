@@ -6,7 +6,7 @@
 class RaceSequence {
 public:
     enum Stage { INDEPENDENT, WAIT_START_BOARD, WAIT_START_CLEAR,
-                 ZEBRA, LIGHT, CONE_CRUISE, CONE, PARKING, FINISHED };
+                 ZEBRA, LIGHT, CONE_CRUISE, CONE, PARKING_CRUISE, PARKING, FINISHED };
 private:
     Stage stage_;
     BoardConfig cfg;
@@ -14,6 +14,7 @@ private:
     int clearHits_=0;
     double clearSince=-1,lastClear=-1,launchedAt=-1;
     double coneCruiseElapsed=0,coneCruiseLast=-1;
+    double parkingCruiseElapsed=0,parkingCruiseLast=-1;
 public:
     RaceSequence(bool enabled,const BoardConfig& c):
         stage_(enabled?WAIT_START_BOARD:INDEPENDENT),cfg(c),startBoard(c){}
@@ -30,6 +31,7 @@ public:
         case LIGHT:return "LIGHT";
         case CONE_CRUISE:return "CONE_CRUISE";
         case CONE:return "CONE";
+        case PARKING_CRUISE:return "PARKING_CRUISE";
         case PARKING:return "PARKING";
         case FINISHED:return "FINISHED";
         default:return "INDEPENDENT";
@@ -73,7 +75,16 @@ public:
         if(coneCruiseElapsed+1e-9>=seconds)stage_=CONE;
     }
     double coneCruiseRemaining(double seconds)const{return stage_==CONE_CRUISE?std::max(0.,seconds-coneCruiseElapsed):0.;}
-    void finishCones(bool done){if(stage_==CONE&&done)stage_=PARKING;}
+    void finishCones(bool done,double now){
+        if(stage_==CONE&&done){stage_=PARKING_CRUISE;parkingCruiseElapsed=0;parkingCruiseLast=now;}
+    }
+    void updateParkingCruise(double now,double seconds,bool forward){
+        if(stage_!=PARKING_CRUISE)return;
+        const double dt=std::max(0.,now-parkingCruiseLast);parkingCruiseLast=now;
+        if(forward)parkingCruiseElapsed+=dt;
+        if(parkingCruiseElapsed+1e-9>=seconds)stage_=PARKING;
+    }
+    double parkingCruiseRemaining(double seconds)const{return stage_==PARKING_CRUISE?std::max(0.,seconds-parkingCruiseElapsed):0.;}
     void finishParking(bool done){if(stage_==PARKING&&done)stage_=FINISHED;}
     void drawStart(cv::Mat& view)const{
         startBoard.draw(view);

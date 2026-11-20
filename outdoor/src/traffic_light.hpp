@@ -161,7 +161,8 @@ public:
         if(!o.roi.empty())cv::rectangle(view,o.roi,{0,200,255},1);
         if(o.panelFound)cv::rectangle(view,o.box,{255,255,0},2);
         cv::rectangle(view,{0,78,640,40},{0,0,0},-1);
-        const std::string label=std::string(nightMode?"NIGHT_V2 ":"SIGNAL ")+(o.state<0?"RED":o.state>0?"GREEN":"UNKNOWN")+(o.confirmed?" OK":" ?");
+        const std::string label=s.mode=="fixed_timed"?"FIXED TIMER / DETECTION OFF":
+            std::string(nightMode?"NIGHT_V2 ":"SIGNAL ")+(o.state<0?"RED":o.state>0?"GREEN":"UNKNOWN")+(o.confirmed?" OK":" ?");
         cv::putText(view,label,{5,94},cv::FONT_HERSHEY_SIMPLEX,.45,{255,255,255},1);
         const double remaining=s.redWaitRemaining>=0?s.redWaitRemaining:s.sequenceRemaining;
         cv::putText(view,s.sequence+" / "+s.phase+" / "+s.releaseReason+cv::format(" %.1fs",remaining),{5,112},cv::FONT_HERSHEY_SIMPLEX,.45,{0,255,255},1);

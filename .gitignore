@@ -9,3 +9,18 @@ __pycache__/
 *.new
 *.install
 *.restore
+
+# Exclude tests, backups and controller runtime files at every level.
+backup/
+backups/
+test/
+tests/
+validation/
+.runtime/
+test_*
+*_test
+*_test.*
+*.bak*
+*.backup*
+*.orig
+*~

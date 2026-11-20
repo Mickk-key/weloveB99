@@ -47,7 +47,7 @@ cone_avoid_start_y: 280.
 cone_full_avoid_y: 420.
 cone_pass_y: 445.
 cone_clearance_fraction: 0.18
-cone_slow_pwm: 10700
+cone_slow_pwm: 10800
 cone_max_width: 180
 cone_min_gap_fraction: 0.025
 cone_lost_grace_s: 0.3
@@ -69,9 +69,9 @@ cone_shape_min_width: 8
 cone_shape_top_ratio: 0.65
 
 # 蓝挡板：发车与终点使用独立状态；同一组现有识别阈值。
-board_h_min: 95
+board_h_min: 90
 board_h_max: 135
-board_s_min: 70
+board_s_min: 30
 board_v_min: 45
 board_roi_top: 100
 board_roi_left: 64
@@ -104,12 +104,18 @@ zebra_max_width_ratio: 2.2
 zebra_max_pitch_ratio: 1.8
 zebra_min_gap_ratio: 0.15
 zebra_max_gap_ratio: 2.5
-zebra_stop_y: 0.60
+zebra_stop_y: 0.63
 zebra_hold_seconds: 10.
 zebra_brake_seconds: 0.8
 zebra_brake_pwm: 7000
 
-# 红绿灯：默认原版颜色识别；--light-night切换现有夜间检测器。
+# all默认不识别红绿灯：斑马线原有等待结束后，巡线10秒→制动→停车10秒→巡线cone_after_light_seconds秒→识别锥桶。
+all_light_fixed_enabled: 1
+all_light_cruise_seconds: 6.7  # 人行道后、定时停车前的巡线前进时间。
+all_light_cruise_pwm: 11000     # 该阶段前进PWM；转向继续使用原巡线PD。
+all_light_stop_seconds: 10.0  # 纯中位等待时间，不包含下面的0.8秒制动。
+# 单独light组合仍使用原版颜色识别；--light-night只在视觉灯模式生效。
+# 定时模式也复用以下制动PWM/时长，制动只发生一次。
 light_brake_pwm: 7000
 light_brake_seconds: 0.8
 light_green_seconds: 0.5
@@ -119,7 +125,7 @@ light_slow_pwm: 10500
 light_slow_settle_seconds: 0.3
 light_detect_interval_ms: 50
 
-# 唯一停车为parking3；蓝板阈值来自board_*，白边来自巡线；其余参数均为本模块实际使用。
+# all默认parking4：选侧/黄色T形停车来自jgy/race，跟边/白板/制动共用parking3参数。
 parking_photo_delay_seconds: 1.0
 parking3_yellow_h_min: 10
 parking3_yellow_h_max: 34
@@ -133,41 +139,110 @@ parking3_max_gap: 18
 parking3_max_slope: 0.25
 parking3_side_frames: 2
 parking3_side_gap_px: 25
-parking3_follow_pwm: 10600
+parking3_follow_pwm: 10700
 parking3_kp: 0.4
 parking3_kd: 0.5
 parking3_steer_limit: 15.0
 parking3_steer_rate: 40.0
 parking3_stop_white_v_min: 230
 parking3_stop_white_s_max: 120
-parking3_stop_min_area: 2200
-parking3_stop_min_bottom: 200
-parking3_stop_min_fill: 0.65
+parking3_stop_min_area: 1700
+parking3_stop_min_bottom: 170
+parking3_stop_min_fill: 0.6
 parking3_stop_confirm_frames: 3
 parking3_stop_confirm_seconds: 0.2
 parking3_stop_center_tolerance: 0.3
 parking3_stop_dim_v_min: 90
-parking3_stop_dim_s_max: 90
-parking3_stop_dark_v_max: 100
-parking3_stop_dark_ring_fraction: 0.6
-parking3_distance_near_px: 100.0
+parking3_stop_dim_s_max: 110
+parking3_stop_dark_v_max: 220
+parking3_stop_dark_ring_fraction: 0.4
+parking3_distance_near_px: 220.0
 parking3_distance_far_px: 40.0
 parking3_error_bias: 0.0
 parking3_line_hold_seconds: 0.3
-parking3_wait_side_pwm: 10500
+parking3_wait_side_pwm: 10600
 parking3_board_full_width: 1 # include boards touching image edges; 0 uses shared board_roi_left/right
 
 # 白矩形确认后的一次制动：同步jgy/race室外配置，结束后保持电机中位。
-parking3_brake_pwm: 8000
-parking3_brake_seconds: 0.3
+parking3_brake_pwm: 8000 # below neutral 10000; lower means stronger reverse command
+parking3_brake_seconds: 0.3 # seconds; 0 disables reverse phase
 
 # Seconds from entering FOLLOW until panel confirmation; 0 disables timeout.
 parking3_follow_timeout_seconds: 0
 
 # 首次触发红灯制动起计时，含制动；重复红灯或未知不重置。0禁用超时。
 light_red_timeout_seconds: 10.0
-# 仅all：灯阶段放行后沿原巡线前进，满5秒才启用锥桶识别。0立即识别。
-cone_after_light_seconds: 5.0
+# 仅all：红绿灯阶段结束后巡线前进多久才开始识别锥桶；定时和视觉灯模式都生效。
+# 仅累计前进命令时间，停车不计入；范围0～60秒，0表示立即启用锥桶。
+cone_after_light_seconds: 4.0
 
 # 1: brake on first red candidate; 2: original two-hit confirmation. Green unchanged.
 light_red_confirm_frames: 1
+
+parking_panel_white_v_min: 190
+parking_panel_white_s_max: 85
+parking_panel_dark_v_max: 160
+parking_panel_min_area: 2000
+parking_panel_min_bottom: 200
+parking_panel_confirm_frames: 3
+parking_panel_confirm_seconds: 0.2
+parking_panel_blob_min_size: 12
+parking_panel_blur_kernel: 7
+parking_panel_center_tolerance: 0.25
+parking3_white_s_max: 70
+parking3_white_v_min: 150
+parking3_white_min_length: 65
+parking3_white_min_gap: 25
+parking3_white_max_slope: 1.6
+parking3_lane_yellow_h_min: 10
+parking3_lane_yellow_h_max: 34
+parking3_lane_yellow_s_min: 35
+parking3_lane_yellow_v_min: 125
+parking3_lane_yellow_min_length: 65
+parking3_lane_yellow_max_slope: 1.6
+parking3_lane_min_gap: 60
+parking3_lane_max_gap: 550
+parking4_side_frames: 2
+parking4_side_gap_px: 25.0
+parking4_lane_hold_seconds: 0.3
+parking4_yellow_stop_enabled: 1
+parking4_stop_yellow_h_min: 10
+parking4_stop_yellow_h_max: 40
+parking4_stop_yellow_s_min: 60
+parking4_stop_yellow_v_min: 100
+parking4_yellow_stop_roi_top: 180
+parking4_yellow_stop_roi_bottom: 470
+parking4_yellow_stop_horizontal_px: 80
+parking4_yellow_stop_vertical_px: 60
+parking4_yellow_stop_join_px: 25
+parking4_yellow_stop_frames: 2
+parking4_yellow_stop_seconds: 0.1
+
+# 仅完整比赛：绕完锥桶并回中后，巡线指定时间才启用parking4；0立即启用，范围0～60秒。
+parking_after_cones_seconds: 10
+
+# ===== parking4 各阶段速度（all 和 lane,parking4 均使用） =====
+# PWM不是实测车速；10000为中位，前进值允许10000..12000。
+# all：绕桶完成 -> 过渡巡线 -> 找蓝板 -> 等选侧 -> 跟线 -> 反转 -> 中位拍照。
+parking4_cruise_pwm: 11000   # 绕桶完成后的过渡巡线；时长用 parking_after_cones_seconds（当前0，跳过）
+parking4_approach_pwm: 10800 # 已启用停车模块，蓝板尚未确认（PARK3_WAIT_BOARD）
+parking4_search_pwm: 10700  # 蓝板确认后，尚未选好侧（PARK3_SEARCH_LINE）；仍正常巡线
+parking4_follow_pwm: 10700  # 选好侧后的单侧白线跟随（PARK3_FOLLOW_WHITE），含短暂丢线/边缘补位
+parking4_brake_pwm: 8000    # 白板/黄色T/超时触发后反转；8000..9999，越小通常越强
+parking4_brake_seconds: 0.3 # 反转持续秒数；0关闭反转，直接中位停车
+# 上述parking4_*速度优先于parking3_*同类速度；parking3单独运行仍用原参数。
+# 最终停止始终使用 speed.neutral_pwm，不能用前进速度代替停车中位。
+# 以下为仍有效的共享控制参数索引，修改文件上方已有项，不要重复添加：
+# board_min_pixels / board_confirm_frames / board_confirm_seconds：蓝板面积和连续确认门槛（也影响all起始挡板）。
+# parking4_side_frames / parking4_side_gap_px / parking4_lane_hold_seconds：选侧帧数、距离差、白线缓存时间。
+# parking3_distance_near_px / parking3_distance_far_px：近/远处离所选白线的向内偏移像素。
+# parking3_error_bias：额外左右微调，正右负左，1单位=8像素。
+# parking3_kp / parking3_kd / parking3_steer_limit / parking3_steer_rate：跟线转向PD、幅度和变化速度。
+# parking3_line_hold_seconds：短时丢线保留上次白线，之后用画面边缘补位。
+# parking3_stop_* / parking_panel_*：白板检测条件；parking4_yellow_stop_* / parking4_stop_yellow_*：黄色T停车条件。
+# parking3_follow_timeout_seconds：选侧后超时停车；0关闭，当前0。
+# parking_photo_delay_seconds：最终中位停车后拍照延迟，当前1秒。
+
+# T形确认后锁存，继续原选侧白线跟随，计时结束才反转；后续T形消失不重置计时。
+parking4_yellow_follow_seconds: 1.2 # 秒；调大停得更晚，0恢复确认后立即制动，范围0..10
+parking4_yellow_follow_pwm: 10700 # 这段巡线的前进PWM；不改变路径和转向PD

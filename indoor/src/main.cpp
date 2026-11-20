@@ -4,6 +4,7 @@
 #include "suite.hpp"
 #include "camera_controls.hpp"
 #include <memory>
+#include <unistd.h>
 #include "parking_photo.hpp"
 
 // 将一帧的状态、PWM、巡线误差及各模块结果组织成 JSONL。
@@ -91,7 +92,7 @@ int main(int argc,char** argv){try{
     // 输入初始化成功后才创建硬件输出对象；未指定 --enable-motion 时不发送 GPIO。
     // Suite 保存跨帧识别和任务状态，records 只保留最近 4096 条状态记录。
     // Output后构造先析构：异常退出也先停止输出，再结束其余对象。
-    Suite suite(c,modules);Output output(c.drive,motion,false,runSeconds);auto start=Clock::now();int n=0;Command command;std::deque<std::string> records;std::string previousState;
+    Suite suite(c,modules);Output output(c.drive,motion,false,runSeconds);auto start=Clock::now();int n=0;Command command;std::deque<std::string> records;std::string previousState,previousZebra;bool zebraVoicePlayed=false;
     ParkingPhoto parkingPhoto(c.parkingPhotoDelay);
     const std::string parkingPhotoPath=out+"_parked_"+std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count())+"_"+std::to_string(getpid())+".jpg";
     // 主循环顺序：取帧 → 算法与任务仲裁 → 输出命令 → 诊断显示。
@@ -111,6 +112,14 @@ int main(int argc,char** argv){try{
                 if(parkingPhoto.update(frame,now,command.state,command.motor,c.drive.neutral_pwm,parkingPhotoPath))
                     std::cout<<"[PARK_PHOTO] saved="<<parkingPhotoPath<<" motion_enabled="<<motion<<std::endl;
             }catch(const std::exception& e){std::cerr<<"[PARK_PHOTO_ERROR] "<<e.what()<<std::endl;}
+            if(modules.zebra&&!zebraVoicePlayed&&previousZebra!="HOLD"&&command.zebra=="HOLD"){
+                zebraVoicePlayed=true;
+                if(motion){pid_t child=fork();
+                    if(child==0){execl("/usr/bin/aplay","aplay","-q","-D","plughw:1,0","audio/parking_announcement.wav",(char*)nullptr);_exit(127);}
+                    std::cout<<"[ZEBRA_AUDIO] hold_started child="<<child<<std::endl;
+                }else std::cout<<"[ZEBRA_AUDIO] hold_started preview_only"<<std::endl;
+            }
+            previousZebra=command.zebra;
             auto message=json(command,now,motion);if(records.size()>=4096)records.pop_front();records.push_back(message);if(n%10==0||command.state!=previousState)console.publish(message);previousState=command.state;
         }
         // 显示原图、识别叠加图及可选巡线掩码；Esc/q 结束。

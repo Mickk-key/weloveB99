@@ -1,4 +1,4 @@
-// 室外总控：挡板发车 → 斑马线 → 红绿灯（含红灯超时）→ 巡线前进 → 视觉绕桶 → parking3。
+// 室外总控：挡板发车 → 斑马线 → 定时巡线/停车 → 定时巡线 → 视觉绕桶 → parking3。
 // 本次新增时序只在outdoor维护，室内副本不随之改动；视觉算法保持原样。
 #pragma once
 #include "runtime.hpp"
@@ -8,35 +8,40 @@
 #include "zebra_original.hpp"
 #include "traffic_light.hpp"
 #include "race_sequence.hpp"
+#include "fixed_light.hpp"
 
-// 巡线始终启用；all 为当前完整比赛组合，停车实现固定为 parking3。
+// 巡线始终启用；all默认使用jgy/race的parking4，parking3仍可单独指定。
 // 仍保留现用模块的单项测试，不保留旧 parking/parking2 名称或模式分支。
 struct Modules {
-    bool light=false,cone=false,zebra=false,parking3=false;
+    bool light=false,cone=false,zebra=false,parking3=false,parking4=false;
     explicit Modules(std::string list="lane"){
         std::stringstream in(list);std::string item;
         while(std::getline(in,item,',')){
-            if(item=="all")light=cone=zebra=parking3=true;
+            if(item=="all"){if(parking3&&!parking4)throw std::runtime_error("Choose parking3 or parking4");light=cone=zebra=parking3=parking4=true;}
             else if(item=="lane"){}
             else if(item=="light")light=true;
             else if(item=="cone")cone=true;
             else if(item=="zebra")zebra=true;
-            else if(item=="parking3")parking3=true;
+            else if(item=="parking3"){if(parking4)throw std::runtime_error("Choose parking3 or parking4");parking3=true;}
+            else if(item=="parking4"){if(parking3&&!parking4)throw std::runtime_error("Choose parking3 or parking4");parking3=parking4=true;}
             else throw std::runtime_error("Unknown module: "+item);
         }
         if(list.empty())throw std::runtime_error("Empty module list");
     }
     bool fullCourse()const{return light&&cone&&zebra&&parking3;}
-    std::string str()const{return std::string("lane")+(light?",light":"")+(cone?",cone":"")+(zebra?",zebra":"")+(parking3?",parking3":"");}
+    std::string str()const{return std::string("lane")+(light?",light":"")+(cone?",cone":"")+(zebra?",zebra":"")+(parking4?",parking4":parking3?",parking3":"");}
 };
 // 当前唯一停车为parking3；旧方案字段不参与加载。非巡线参数沿用室外现值。
 struct SuiteConfig {
-    TrafficControlConfig light;bool lightNight=false;
+    TrafficControlConfig light;bool lightNight=false;FixedLightConfig fixedLight;
     Parking3Config parking3;Settings drive;LaneBackendConfig lane;
     ConeConfig cone;BoardConfig board;zebra::Config zebra;
     std::string backend=LaneBackend::name();
     double parkingPhotoDelay=1.0;
     double coneAfterLightSeconds=5.; // 仅all：灯阶段完成后，先巡线再启用锥桶识别。
+    int parking4CruisePwm=11000,parking4ApproachPwm=11000,parking4SearchPwm=10600,parking4FollowPwm=10600,parking4FinalFollowPwm=10600,parking4BrakePwm=8000;
+    double parking4BrakeSeconds=.3;
+    double parkingAfterConesSeconds=5.; // 绕桶并回中完成后，先巡线再启用停车识别。
     // 终点白板确认后只制动一次；参数与jgy/race室外配置一致。
     int parking3BrakePwm=9500;double parking3BrakeSeconds=.3;
     double zebraY=.70,zebraHold=10,zebraBrake=.8;
@@ -48,14 +53,33 @@ struct SuiteConfig {
         if(!fs["parking3_brake_seconds"].empty())fs["parking3_brake_seconds"]>>parking3BrakeSeconds;
         if(parking3BrakePwm<8000||parking3BrakePwm>=drive.neutral_pwm||!std::isfinite(parking3BrakeSeconds)||parking3BrakeSeconds<0||parking3BrakeSeconds>3)throw std::runtime_error("Invalid parking3 brake PWM/duration");
         parking3.load(fs);lane.load(fs);cone.load(fs);board.load(fs);light.load(fs,drive.neutral_pwm);
+        fixedLight.load(fs,drive.neutral_pwm);
 #define R(key,field) if(!fs[key].empty())fs[key]>>field
         R("parking_photo_delay_seconds",parkingPhotoDelay);R("lane_backend",backend);
         R("cone_after_light_seconds",coneAfterLightSeconds);
+        R("parking_after_cones_seconds",parkingAfterConesSeconds);
+        // Backward compatibility for YAML files without parking4 speed overrides.
+        parking4CruisePwm=parking4ApproachPwm=drive.after_corner_pwm;
+        parking4SearchPwm=parking3.waitPwm;parking4FollowPwm=parking3.forwardPwm;
+        parking4BrakePwm=parking3BrakePwm;parking4BrakeSeconds=parking3BrakeSeconds;
+        R("parking4_cruise_pwm",parking4CruisePwm);
+        R("parking4_approach_pwm",parking4ApproachPwm);
+        R("parking4_search_pwm",parking4SearchPwm);
+        R("parking4_follow_pwm",parking4FollowPwm);
+        parking4FinalFollowPwm=parking4FollowPwm;
+        R("parking4_yellow_follow_pwm",parking4FinalFollowPwm);
+        R("parking4_brake_pwm",parking4BrakePwm);
+        R("parking4_brake_seconds",parking4BrakeSeconds);
         R("zebra_stop_y",zebraY);R("zebra_hold_seconds",zebraHold);R("zebra_brake_seconds",zebraBrake);R("zebra_brake_pwm",zebraBrakePwm);
         R("camera_fps",cameraFps);R("camera_brightness",brightness);R("camera_gain",gain);R("camera_white_balance_auto",whiteBalanceAuto);
 #undef R
+        for(int pwm:{parking4CruisePwm,parking4ApproachPwm,parking4SearchPwm,parking4FollowPwm,parking4FinalFollowPwm})
+            if(pwm<drive.neutral_pwm||pwm>12000)throw std::runtime_error("parking4 forward PWM must be neutral_pwm..12000");
+        if(parking4BrakePwm<8000||parking4BrakePwm>=drive.neutral_pwm||!std::isfinite(parking4BrakeSeconds)||parking4BrakeSeconds<0||parking4BrakeSeconds>3)
+            throw std::runtime_error("Invalid parking4 brake PWM/duration");
         if(!std::isfinite(parkingPhotoDelay)||parkingPhotoDelay<0||parkingPhotoDelay>60)throw std::runtime_error("parking_photo_delay_seconds must be 0..60");
         if(!std::isfinite(coneAfterLightSeconds)||coneAfterLightSeconds<0||coneAfterLightSeconds>60)throw std::runtime_error("cone_after_light_seconds must be 0..60");
+        if(!std::isfinite(parkingAfterConesSeconds)||parkingAfterConesSeconds<0||parkingAfterConesSeconds>60)throw std::runtime_error("parking_after_cones_seconds must be 0..60");
 #define Z(n) if(!fs[#n].empty())fs[#n]>>zebra.n
         Z(zebra_white_s_max);Z(zebra_white_v_min);Z(zebra_min_stripes);Z(zebra_confirm_frames);
         Z(zebra_roi_left);Z(zebra_roi_right);Z(zebra_roi_top);Z(zebra_roi_bottom);
@@ -90,7 +114,7 @@ struct Command {
     double error=0,baseError=0,offset=0,target=78,zebraY=0,brakeRemaining=-1;
     int coneTarget=0,coneNext=0,coneTracks=0,coneSide=0;double coneHandoff=0;
     bool parkingArmed=false;double frameDt=0,processingMs=0;
-    double coneCruiseRemaining=0;
+    double coneCruiseRemaining=0,parkingCruiseRemaining=0;
     std::string parkingPath="NONE";
     bool panelChecked=false,panelFound=false;int panelHits=0,parkingSide=0;
     std::string state="WAIT",cone="DISABLED",zebra="DISABLED",parking="DISABLED";
@@ -98,18 +122,23 @@ struct Command {
 class Suite {
     SuiteConfig cfg;Modules modules;LaneBackend lane;
 
-    TrafficLightControl traffic;RaceSequence race;
+    TrafficLightControl traffic;RaceSequence race;FixedLightSequence fixedLight;
+    bool fixedLightEnabled()const{return modules.fullCourse()&&cfg.fixedLight.enabled;}
     double lastInputTime=-1,lastTime=-1,runStart=-1,filtered=78;
     int lastMotor=10000;
     double parking3BrakeAt=-1; // 锁存首次白板确认时刻，后续帧不能延长或重复制动。
     OriginalPd pd;ZebraGate zebraGate;Parking3 parking3;
+    static Parking3Config parkingConfig(const SuiteConfig& c,const Modules& m){
+        auto p=c.parking3;p.laneSide=m.parking4;p.yellowOnly=m.fullCourse()&&m.parking4&&p.allYellowOnly;
+        if(p.yellowOnly&&!p.yellowStop.enabled)throw std::runtime_error("Yellow-only parking requires parking4_yellow_stop_enabled=1");return p;
+    }
 
 public:
     ConeAvoidV2 cone;BlueBoardStop board;LaneV2 geometry;
     zebra::ZebraResult stripes;cv::Mat laneMask;
     explicit Suite(const SuiteConfig& c,Modules m):cfg(c),modules(m),lane(c.lane),
-        traffic(c.light,c.lightNight,m.fullCourse()),race(m.fullCourse(),c.board),filtered(c.drive.servo_center),
-        parking3(c.parking3,c.board),cone(c.cone),board(c.board){}
+        traffic(c.light,c.lightNight&&!(m.fullCourse()&&c.fixedLight.enabled),m.fullCourse()),race(m.fullCourse(),c.board),filtered(c.drive.servo_center),
+        parking3(parkingConfig(c,m),c.board),cone(c.cone),board(c.board){}
     // 输入时间必须非负且单调；跨帧状态保存在 Suite 中，首次 dt 按 0.05 秒处理。
     // 每帧先以电机中位、舵机居中初始化，再逐级生成和覆盖命令。
     Command step(cv::Mat frame,double now){
@@ -140,8 +169,17 @@ public:
             }
             out.zebra=zebraGate.phase(now,cfg);race.finishZebra(zebraGate.done);
         }
-        const bool runLight=modules.light&&race.lightAllowed();
-        if(runLight){
+        const bool fixedMode=fixedLightEnabled();
+        const bool runLight=modules.light&&race.lightAllowed()&&!fixedMode;
+        if(fixedMode){
+            fixedLight.update(now,race.lightAllowed(),lastMotor>cfg.drive.neutral_pwm,
+                              cfg.fixedLight,cfg.light.brakeSeconds);
+            out.light.mode="fixed_timed";
+            out.light.phase=out.light.sequence=fixedLight.name();
+            out.light.sequenceRemaining=fixedLight.remaining(now,cfg.fixedLight);
+            out.light.releaseReason=fixedLight.done()?"fixed_timer":"none";
+            race.finishLight(fixedLight.done(),now);
+        }else if(runLight){
             traffic.update(frame,now,modules.zebra,zebraGate.done,lastMotor>cfg.drive.neutral_pwm);
             out.light=traffic.status(now);
             race.finishLight(traffic.done(),now);
@@ -149,16 +187,21 @@ public:
             out.light=traffic.status(now);out.light.detectionRan=false;
             if(!traffic.done())out.light.phase=out.light.sequence="WAIT_STAGE";
         }
-        race.updateConeCruise(now,cfg.coneAfterLightSeconds,lastMotor>cfg.drive.neutral_pwm);
-        out.coneCruiseRemaining=race.coneCruiseRemaining(cfg.coneAfterLightSeconds);
+        // 定时或视觉灯阶段结束后，都按YAML巡线指定时间，再启用锥桶检测。
+        const double coneDelay=cfg.coneAfterLightSeconds;
+        race.updateConeCruise(now,coneDelay,lastMotor>cfg.drive.neutral_pwm);
+        out.coneCruiseRemaining=race.coneCruiseRemaining(coneDelay);
         // 视觉确认通过两个桶并回中后解锁停车；本帧新计数到下一帧使用。
-        bool trafficHold=(modules.light&&traffic.active())||(modules.zebra&&!zebraGate.done&&zebraGate.began>=0);
+        bool trafficHold=(modules.light&&traffic.active())||(fixedMode&&(fixedLight.braking()||fixedLight.holding()))||
+                         (modules.zebra&&!zebraGate.done&&zebraGate.began>=0);
         bool conesDone=!modules.cone||cone.laneCompleted();
-        race.finishCones(conesDone);
+        race.finishCones(conesDone,now);
+        race.updateParkingCruise(now,cfg.parkingAfterConesSeconds,lastMotor>cfg.drive.neutral_pwm);
+        out.parkingCruiseRemaining=race.parkingCruiseRemaining(cfg.parkingAfterConesSeconds);
         bool runCones=modules.cone&&race.coneAllowed();
         out.parkingArmed=modules.parking3&&race.parkingAllowed()&&conesDone;
         if(out.parkingArmed){
-            board.update(frame,now);parking3.update(frame,now,!trafficHold&&now>=1,geometry);out.parking=parking3.state;out.panelChecked=parking3.side!=0;out.panelFound=parking3.panelFound();out.panelHits=parking3.panelHits();out.parkingPath=parking3.path;
+            board.update(frame,now);parking3.update(frame,board,now,!trafficHold&&now>=1,geometry);out.parking=parking3.state;out.panelChecked=parking3.side!=0;out.panelFound=parking3.panelFound();out.panelHits=parking3.panelHits();out.parkingPath=parking3.path;
         }
         else if(modules.parking3)out.parking=race.enabled()&&race.stage()!=RaceSequence::CONE?"WAIT_STAGE":"WAIT_CONES";
         bool parkingActive=out.parkingArmed&&parking3.engaged();
@@ -175,6 +218,7 @@ public:
         if(out.state=="RUN"){
             if(runStart<0)runStart=now;
             out.motor=lane_throttle(std::llround((now-runStart)*1000),cfg.drive);
+            if(runCones&&!parkingActive&&out.motor>cfg.drive.neutral_pwm)out.motor=cfg.cone.cone_search_pwm;
             if(runCones&&!parkingActive&&(cone.near||std::abs(out.offset)>.01)){
                 out.state="CONE_"+cone.phase;
                 if(out.motor>cfg.drive.neutral_pwm)out.motor=std::min(out.motor,cfg.drive.cone_slow_pwm);
@@ -189,9 +233,17 @@ public:
 
         }else pd.previous=out.error;
         if(race.stage()==RaceSequence::CONE_CRUISE&&out.state=="RUN")out.state="CONE_CRUISE";
+        if(race.stage()==RaceSequence::PARKING_CRUISE&&out.state=="RUN")out.state="PARKING_CRUISE";
+        // Parking4 speeds apply only after preceding course stages permit parking.
+        if(modules.parking4&&now>=1){
+            if(race.stage()==RaceSequence::PARKING_CRUISE)out.motor=cfg.parking4CruisePwm;
+            else if(out.parkingArmed&&!parking3.engaged())out.motor=cfg.parking4ApproachPwm;
+        }
         if(out.parkingArmed&&parking3.engaged()){
             out.state=out.parking=parking3.state;out.parkingPath=parking3.path;
             out.motor=parking3.stopped?cfg.drive.neutral_pwm:parking3.motor();
+            if(modules.parking4&&!parking3.stopped)
+                out.motor=parking3.finalFollowing()?cfg.parking4FinalFollowPwm:parking3.useLane?cfg.parking4SearchPwm:cfg.parking4FollowPwm;
             if(parking3.useLane&&!parking3.stopped){
                 // 蓝挡板离开视野或缺少可信白边时，保留上方正常巡线的误差与舵机结果。
             }else{
@@ -218,13 +270,24 @@ public:
             out.motor=traffic.braking(now)?cfg.light.brakePwm:cfg.drive.neutral_pwm;
             out.brakeRemaining=traffic.braking(now)?traffic.brakeRemaining(now):-1;
         }
+        if(fixedMode&&fixedLight.active()){
+            out.state=std::string("LIGHT_")+fixedLight.name();
+            out.motor=fixedLight.cruising()?cfg.fixedLight.cruisePwm:
+                      fixedLight.braking()?cfg.light.brakePwm:cfg.drive.neutral_pwm;
+            out.brakeRemaining=fixedLight.braking()?fixedLight.brakeRemaining(now):-1;
+            // 前进阶段保留上方巡线PD和转向限速的结果；仅制动/等待时居中。
+            if(!fixedLight.cruising()){
+                out.steer=int(cfg.drive.servo_center);out.target=filtered=cfg.drive.servo_center;
+                pd.previous=out.error;
+            }
+        }
         // 终点停车优先于斑马线/红灯；制动剩余时间交给现有Output截止计时。
         if(out.parkingArmed&&parking3.stopped){
             if(parking3BrakeAt<0)parking3BrakeAt=now;
-            double remaining=std::max(0.,cfg.parking3BrakeSeconds-(now-parking3BrakeAt));
+            double remaining=std::max(0.,(modules.parking4?cfg.parking4BrakeSeconds:cfg.parking3BrakeSeconds)-(now-parking3BrakeAt));
             bool braking=remaining>1e-9;
             out.state=out.parking=braking?"PARK3_BRAKE":"PARK3_PANEL_STOP";
-            out.motor=braking?cfg.parking3BrakePwm:cfg.drive.neutral_pwm;
+            out.motor=braking?(modules.parking4?cfg.parking4BrakePwm:cfg.parking3BrakePwm):cfg.drive.neutral_pwm;
             out.brakeRemaining=braking?remaining:-1;
             out.steer=int(cfg.drive.servo_center);out.target=filtered=cfg.drive.servo_center;
         }
@@ -246,7 +309,7 @@ public:
         cv::Mat view=raw.clone();
         if(race.waiting())race.drawStart(view);
         else{
-            if(c.parking!="PARK3_FOLLOW_WHITE")geometry.draw(view,c.offset);
+            if(c.parking!="PARK3_FOLLOW_WHITE"&&c.parking!="PARK4_FINAL_FOLLOW")geometry.draw(view,c.offset);
             if(modules.cone)cone.draw(view,c.cone);
             if(modules.parking3&&board.candidate)cv::rectangle(view,board.box,{255,200,0},2);
             if(modules.parking3)parking3.draw(view);

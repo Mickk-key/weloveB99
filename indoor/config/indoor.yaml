@@ -168,3 +168,6 @@ parking3_board_full_width: 1 # include boards touching image edges; 0 uses share
 # 白矩形确认后的一次制动：同步jgy/race室外配置，结束后保持电机中位。
 parking3_brake_pwm: 9500
 parking3_brake_seconds: 0.3
+
+# Seconds from entering FOLLOW until panel confirmation; 0 disables timeout.
+parking3_follow_timeout_seconds: 2.0
